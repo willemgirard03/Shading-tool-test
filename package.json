@@ -1,0 +1,18 @@
+{
+  "name": "vancouver-solar-shading-explorer",
+  "version": "6.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A teaching tool for solar geometry and shading: sun angles, profile angles, sun inside the room and direct solar gain, for a building in Vancouver.",
+  "scripts": {
+    "test": "node test/verify.mjs",
+    "build": "node build.mjs",
+    "serve": "node serve.mjs"
+  },
+  "dependencies": {
+    "rhino3dm": "8.4.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}
