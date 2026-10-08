@@ -21,7 +21,7 @@
 import { SHEET0 } from '../draw/svg.js';
 import { VIEW_TYPES } from './views.js';
 
-const KEY = 'solar-shading-layout-v7c';
+const KEY = 'solar-shading-layout-v8';
 const $ = id => document.getElementById(id);
 export const LAYOUT0 = [{ views: [{ type: 'axon' }, { type: 'sun' }] }, { views: [{ type: 'section' }, { type: 'plan' }] }, { views: [{ type: 'detail' }] },
   { views: [{ type: 'gday' }, { type: 'gyear' }] }];

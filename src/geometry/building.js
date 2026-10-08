@@ -15,7 +15,11 @@
    at the end of one bay reaches across to the next. Only neighbours within
    reach are taken - a device can only be met by a ray that has not yet left
    its depth - and units whose surroundings are identical are recognised as
-   such, so a whole facade costs a handful of distinct units, not every one. */
+   such, so a whole facade costs a handful of distinct units, not every one.
+
+   Context buildings - plain extrusions on the site - are neighbours too:
+   each is a box in the world, taken into a unit's coordinates wherever it
+   stands in front of the glass and rises above its foot. */
 
 import { D2R, wrap360, wrap180 } from '../util.js';
 import { buildCell, glazingBox, BLANK_WALL_T, SLAB0 } from './cell.js';
@@ -121,7 +125,9 @@ export function buildBuilding(S) {
     const rows = S.storeys.map((s, st) => {
       const gf = facadeAzimuth(S, f, st), len = facadeLength(S, f, st), frame = facadeFrame(S, f, st), off = faceOffset(S, f, st);
       // the side's reference read back through the library: its system, unit and shading
-      const ref = s.cells[f] || null, glz = ref ? flatGlazing(S, ref) : null, slab = s.slab ?? SLAB0;
+      // each side's glass takes the side's SHGC, where one is set
+      const side = g => (g && S.shgc && S.shgc[f] !== undefined ? Object.assign(g, { shgc: S.shgc[f] }) : g);
+      const ref = s.cells[f] || null, glz = ref ? side(flatGlazing(S, ref)) : null, slab = s.slab ?? SLAB0;
       const cell = glz ? buildCell(glz, s.h, len, gf, slab) : null;
       // each unit's bay, clipped to the side; set out by spacing, what the bays
       // leave at the two ends is plain wall
@@ -130,7 +136,7 @@ export function buildBuilding(S) {
         for (let i = 0; i < cell.n; i++) {
           const cc = cell.first + cell.pitch * i;
           // a unit broken from the array stands in its place with a cell of its own
-          const ug = (ref.broken && ref.broken[i]) || (ref.brokenShd && ref.brokenShd[i]) ? flatGlazing(S, ref, i) : null;
+          const ug = (ref.broken && ref.broken[i]) || (ref.brokenShd && ref.brokenShd[i]) ? side(flatGlazing(S, ref, i)) : null;
           let uc = cell;
           if (ug) { const c2 = buildCell(ug, s.h, len, gf, slab); uc = own.get(c2.key) || c2; own.set(uc.key, uc); }
           if (!cids.has(uc.key)) cids.set(uc.key, cids.size);
@@ -151,7 +157,92 @@ export function buildBuilding(S) {
     const here = rows[Math.max(0, Math.min(rows.length - 1, S.sel.st))];
     facades[f] = { f, gf: here.gf, len: here.len, frame: here.frame, rows };
   }
-  return { facades, height: buildingHeight(S), S };
+  return { facades, height: buildingHeight(S), S, context: contextBoxes(S) };
+}
+
+/* ---------- context buildings ----------
+   Other buildings on and round the site that may shade this one, each a plain
+   extrusion: { id, w, d, h, x, y, a } - its width along its own x, its depth
+   along its own y, its height, its centre and its turn (clockwise). Those are
+   read in the axes S.site.ctxFrame names: 'building', the ground floor's own,
+   so they turn and move with the building and its site; or 'world', east and
+   north from true north, so they stay put whatever the building does. */
+export const CTX_DRAFT0 = () => ({ w: 20, d: 15, h: 15 });
+/** the axes context buildings are read in: turned a from true north, about C */
+export function contextAxes(S, mode) {
+  const m = mode || (S.site && S.site.ctxFrame) || 'building';
+  return m === 'world' ? { a: 0, C: [0, 0] } : { a: storeyRot(S, 0), C: storeyCentre(S, 0) };
+}
+/** a context building in the world: its centre on the ground and its turn from true north */
+export function contextPlace(S, c, mode) {
+  const X = contextAxes(S, mode), p = turn(X.a, c.x || 0, c.y || 0);
+  return { C: [p[0] + X.C[0], p[1] + X.C[1]], a: X.a + (c.a || 0) };
+}
+/** a point in the world, in the axes context buildings are read in */
+export function contextLocal(S, P, mode) { const X = contextAxes(S, mode); return turn(-X.a, P[0] - X.C[0], P[1] - X.C[1]); }
+/** every context building as a box in the world: its centre, its own x and y on the ground, its half-sizes */
+export function contextBoxes(S) {
+  return ((S.site && S.site.ctx) || []).filter(c => c.w > 0 && c.d > 0 && c.h > 0).map(c => {
+    const p = contextPlace(S, c);
+    return { id: c.id, c: [p.C[0], p.C[1], c.h / 2], ex: turn(p.a, 1, 0), ey: turn(p.a, 0, 1), h: [c.w / 2, c.d / 2, c.h / 2], a: p.a };
+  });
+}
+/** a context building's footprint in the world, corner by corner */
+export function contextFoot(S, c) {
+  const p = contextPlace(S, c), ex = turn(p.a, 1, 0), ey = turn(p.a, 0, 1), hw = c.w / 2, hd = c.d / 2;
+  return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sy]) => [p.C[0] + sx * hw * ex[0] + sy * hd * ey[0], p.C[1] + sx * hw * ex[1] + sy * hd * ey[1]]);
+}
+/* The nearest two convex outlines come on plan: 0 where they overlap (tested
+   axis by axis on every edge's normal), else the least of every corner's
+   distance to the other's edges, with the two points it runs between. */
+function polyGap(A, B) {
+  const separated = (P, Q) => P.some((p, i) => {
+    const q = P[(i + 1) % P.length], n = [q[1] - p[1], p[0] - q[0]];
+    const pr = R => R.map(r => r[0] * n[0] + r[1] * n[1]), a = pr(P), b = pr(Q);
+    return Math.max(...a) < Math.min(...b) - 1e-9 || Math.max(...b) < Math.min(...a) - 1e-9;
+  });
+  let best = { d: Infinity, a: A[0], b: B[0] };
+  const near = (p, Q, flip) => Q.forEach((q0, i) => {
+    const q1 = Q[(i + 1) % Q.length], dx = q1[0] - q0[0], dy = q1[1] - q0[1], L2 = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, ((p[0] - q0[0]) * dx + (p[1] - q0[1]) * dy) / L2)), x = [q0[0] + dx * t, q0[1] + dy * t];
+    const d = Math.hypot(p[0] - x[0], p[1] - x[1]);
+    if (d < best.d) best = flip ? { d, a: x, b: p } : { d, a: p, b: x };
+  });
+  A.forEach(p => near(p, B, false)); B.forEach(p => near(p, A, true));
+  if (!separated(A, B) && !separated(B, A)) best = { d: 0, a: best.a, b: best.b };
+  return best;
+}
+/** the nearest a context building comes to the building on plan, at any storey: { d, a: on the massing, b: on the building } */
+export function contextGap(S, c) {
+  const foot = contextFoot(S, c);
+  let best = { d: Infinity, a: foot[0], b: foot[0] };
+  for (let i = 0; i < S.storeys.length; i++) { const g = polyGap(foot, plateWorld(S, i)); if (g.d < best.d) best = g; }
+  return best;
+}
+/** a world box's corners: the four at the ground, then the four at its top */
+export function boxCorners(b) {
+  const out = [];
+  for (const z of [0, 2 * b.h[2]]) for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]])
+    out.push([b.c[0] + sx * b.h[0] * b.ex[0] + sy * b.h[1] * b.ey[0], b.c[1] + sx * b.h[0] * b.ex[1] + sy * b.h[1] * b.ey[1], z]);
+  return out;
+}
+/* The context buildings a unit can see, in its own coordinates (u along the
+   side from the unit's middle, v up from the storey's floor, w out from the
+   glass). Only one that stands in front of the glass and rises above its foot
+   can meet a ray leaving it - the sun is above the horizon, so the ray climbs. */
+function contextIn(B, row, u) {
+  const out = [];
+  if (!B.context || !B.context.length) return out;
+  const fr = row.frame, U = fr.U, W = fr.W, rev = u.cell.reveal, foot = u.cell.opening ? u.cell.opening.v0 : 0;
+  const onU = d => d[0] * U[0] + d[1] * U[1], onW = d => d[0] * W[0] + d[1] * W[1];
+  for (const b of B.context) {
+    const d = [b.c[0] - fr.O[0], b.c[1] - fr.O[1]];
+    const c = [onU(d) - u.cc, b.c[2] - row.zb, onW(d) + rev];
+    const e1 = [onU(b.ex), 0, onW(b.ex)], e3 = [onU(b.ey), 0, onW(b.ey)], h = [b.h[0], b.h[2], b.h[1]];
+    if (c[2] + Math.abs(e1[2]) * h[0] + Math.abs(e3[2]) * h[2] <= 1e-6 || c[1] + h[1] <= foot) continue;
+    out.push({ c, e1, e2: [0, 1, 0], e3, h, ctx: true, site: true, kind: 'site', D: null, id: b.id, name: 'context building' });
+  }
+  return out;
 }
 
 /** where several cells' elements reach together */
@@ -302,13 +393,15 @@ const massBox = (cell, u, o) => aaBox(-o.r.len / 2 + o.sU - u.cc, o.r.len / 2 + 
    key still changes whenever any of them does. The key is all that is needed
    to tell units apart, so the models - with every neighbour's members moved
    into place - are built only for the distinct ones. */
-function keyOf(cell, nb, oh, u) {
+function keyOf(cell, nb, oh, u, cx = []) {
   const sig = nb.map(g => g.R ? g.dv.toFixed(4) + ',R' + [g.R.a, g.R.b].map(x => x.toFixed(6)).join(',') + ',' + g.cid + ',' + g.pts.map(p => p[0].toFixed(4) + ':' + p[1].toFixed(4)).join('/')
     : g.dv.toFixed(4) + ',' + g.dw.toFixed(4) + ',' + g.cid + ',' + runSig(g.du));
   const ids = [...new Map(nb.map(g => [g.cid, g.c.key])).entries()].sort((a, b) => a[0] - b[0]);
   // an overhanging storey is placed relative to this unit, so where the unit stands matters
   const ms = oh.map(o => o.box ? 'B' + [...o.box.c, ...o.box.e1, ...o.box.h].map(x => x.toFixed(4)).join(',') : [o.dv, o.r.h, o.out, o.r.len / 2 + o.sU - u.cc, o.r.len / 2 - o.sU + u.cc].map(x => x.toFixed(4)).join(','));
-  return cell.key + '#' + sig.join(';') + '#' + ids.map(([id, k]) => id + '=' + k).join('&') + (ms.length ? '#M' + ms.join(';') : '');
+  // and so are the context buildings it can see
+  const cs = cx.map(b => [...b.c, b.e1[0], b.e1[2], ...b.h].map(x => x.toFixed(4)).join(','));
+  return cell.key + '#' + sig.join(';') + '#' + ids.map(([id, k]) => id + '=' + k).join('&') + (ms.length ? '#M' + ms.join(';') : '') + (cs.length ? '#C' + cs.join(';') : '');
 }
 /** a unit's key, worked out once per building - the analysis and the building view both ask */
 export function unitKey(B, f, st, i) {
@@ -316,7 +409,7 @@ export function unitKey(B, f, st, i) {
   let k = memo.get(id);
   if (k === undefined) {
     const fac = B.facades[f], row = fac.rows[st];
-    memo.set(id, k = keyOf(row.units[i].cell, neighbours(fac, row, i), overhangs(fac, row, row.units[i]), row.units[i]));
+    memo.set(id, k = keyOf(row.units[i].cell, neighbours(fac, row, i), overhangs(fac, row, row.units[i]), row.units[i], contextIn(B, row, row.units[i])));
   }
   return k;
 }
@@ -328,9 +421,11 @@ export function unitModel(B, f, st, i) {
     for (const d of g.du) for (const b of g.c.elements) ctx.push(moveBox(b, d, g.dv, g.dw, { ctx: true, st: g.r.st }));
   }
   for (const o of oh) ctx.push(o.box ? Object.assign({}, o.box) : massBox(cell, u, o));
+  const cx = contextIn(B, row, u);
+  ctx.push(...cx);
   return Object.assign({}, cell, {
     own: cell.elements, ctx, elements: cell.elements.concat(ctx),
-    key: keyOf(cell, nb, oh, u), off: row.off, len: row.len,
+    key: keyOf(cell, nb, oh, u, cx), off: row.off, len: row.len,
     f, st, i, cc: u.cc, zb: row.zb, r0: u.r0, r1: u.r1, shgc: cell.glz.shgc ?? 0.4, broken: u.broken
   });
 }

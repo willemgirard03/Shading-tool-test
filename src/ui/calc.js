@@ -36,7 +36,8 @@ export { projectionAt };
 const deg = x => fmt(x, 1) + '°';
 const eq = s => `<div class="eqline">${s}</div>`;
 const mm = x => fmt(x * 1000, 0) + ' mm';
-const m2 = x => fmt(x, 2) + ' m';
+// every length in millimetres, as the drawings give them
+const m2 = x => fmt(x * 1000, 0) + ' mm';
 
 /* ---------- the bubbles and their calculations ----------
    A bubble's calculation stays open across redraws: which one is open is kept

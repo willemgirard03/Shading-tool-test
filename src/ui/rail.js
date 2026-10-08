@@ -23,6 +23,7 @@ import { TYPOLOGIES, SHADING_PRESETS, DEVICES_MAX, STOREYS_MAX, getValue, selGla
   selCell, selSystem, selUnitType } from '../state.js';
 import { SYSTEM_PRESETS, UNIT_PRESETS, usage, entryName, defaultName, layoutGlazing } from '../library.js';
 import { site0, SITE_KINDS, isStreet } from '../geometry/site.js';
+import { V as VIEW } from '../view.js';
 
 /* ---------- the controls ----------
    Every slider is described once: label, limits, step, the unit it is shown
@@ -31,18 +32,18 @@ const SPEC = {
   doy: ['Day of year', 1, 365, 1, '', 1, 0],
   hour: ['Time of day', 0, 24, 1 / 60, '', 1, 2],
   rot: ['Building north offset', -180, 180, 0.5, '°', 1, 1],
-  plnW: ['Floorplate width (N–S)', 8, 80, 0.5, 'm', 1, 1],
-  plnD: ['Floorplate depth (E–W)', 6, 60, 0.5, 'm', 1, 1],
-  sh: ['Storey height', 2.4, 8, 0.05, 'm', 1, 2],
+  plnW: ['Floorplate width', 4, 200, 0.5, 'mm', 1000, 0],
+  plnD: ['Floorplate depth', 4, 200, 0.5, 'mm', 1000, 0],
+  sh: ['Storey height', 2.4, 8, 0.05, 'mm', 1000, 0],
   sunAlt: ['Solar altitude β', 0.2, 89.9, 0.1, '°', 1, 1],
   sunAz: ['Solar azimuth', -180, 180, 0.1, '°', 1, 1],
-  cutU: ['Section cut', -20, 20, 0.01, 'm', 1, 2],
-  cutV: ['Plan cut', 0, 8, 0.01, 'm', 1, 2],
+  cutU: ['Section cut', -20, 20, 0.01, 'mm', 1000, 0],
+  cutV: ['Plan cut', 0, 8, 0.01, 'mm', 1000, 0],
   gamma: ['γ', -89, 89, 0.1, '°', 1, 1],
   theta: ['Profile angle θ', 0.5, 89.5, 0.1, '°', 1, 1],
-  plnOX: ['Offset east (+) / west (−)', -30, 30, 0.1, 'm', 1, 2],
-  plnOY: ['Offset north (+) / south (−)', -30, 30, 0.1, 'm', 1, 2],
-  h: ['Storey height', 2.4, 8, 0.05, 'm', 1, 2],
+  plnOX: ['Offset east (+) / west (−)', -200, 200, 0.1, 'mm', 1000, 0],
+  plnOY: ['Offset north (+) / south (−)', -200, 200, 0.1, 'mm', 1000, 0],
+  h: ['Storey height', 2.4, 8, 0.05, 'mm', 1000, 0],
   'g.winW': ['Window width', 0.6, 8, 0.05, 'mm', 1000, 0],
   'g.winH': ['Window height', 0.6, 5, 0.05, 'mm', 1000, 0],
   'g.sill': ['Sill height', 0, 2, 0.05, 'mm', 1000, 0],
@@ -51,12 +52,22 @@ const SPEC = {
   'g.winSp': ['Spacing', 0.3, 20, 0.05, 'mm', 1000, 0],
   'g.wallT': ['Wall thickness', 0.1, 0.8, 0.005, 'mm', 1000, 0],
   'g.reveal': ['Glass setback', 0, 0.8, 0.005, 'mm', 1000, 0],
+  // the window's sill and head as the section sets them, a shading array's number and spacing as its bracket does
+  'g.sillK': ['Sill height', 0, 4, 0.05, 'mm', 1000, 0],
+  'g.head': ['Head height', 0.3, 8, 0.05, 'mm', 1000, 0],
+  'g.headGap': ['Head to ceiling', 0, 6, 0.05, 'mm', 1000, 0],
+  'a.arrN': ['Members', 1, 200, 1, '', 1, 0],
+  'a.arrSp': ['Spacing', 0.02, 3, 0.01, 'mm', 1000, 0],
   slabT: ['Slab thickness', 0, 2, 0.01, 'mm', 1000, 0],
   'd.depth': ['Depth', 0.02, 2.5, 0.01, 'mm', 1000, 0],
   'd.thick': ['Thickness', 0.005, 0.3, 0.005, 'mm', 1000, 0],
   'd.angle': ['Angle', -85, 85, 1, '°', 1, 0],
   'd.len': ['Length', 0.05, 12, 0.05, 'mm', 1000, 0],
   'd.lenX': ['Extension', -3, 6, 0.01, 'mm', 1000, 0],
+  'd.full': ['Length', 0.05, 20, 0.005, 'mm', 1000, 0],
+  'd.clear': ['Gap to the wall', 0, 1.5, 0.005, 'mm', 1000, 0],
+  surfAz: ['Surface azimuth', -180, 180, 0.1, '°', 1, 1],
+  'd.proj': ['Projection', 0.02, 3, 0.005, 'mm', 1000, 0],
   'd.offU': ['Horizontal offset', -3, 3, 0.01, 'mm', 1000, 0],
   'd.offV': ['Vertical offset', -3, 3, 0.01, 'mm', 1000, 0],
   'd.offset': ['Wall offset', 0, 1.5, 0.01, 'mm', 1000, 0],
@@ -64,13 +75,25 @@ const SPEC = {
   'a.spacing': ['Spacing', 0.02, 3, 0.01, 'mm', 1000, 0],
   'a.count': ['Members', 1, 40, 1, '', 1, 0],
   plnRot: ['Floor rotation', -180, 180, 0.5, '°', 1, 1],
-  'site.off': ['Setback from the face', 0, 40, 0.1, 'm', 1, 2],
-  'site.width': ['Street width', 3, 60, 0.5, 'm', 1, 1],
-  'site.curb': ['Curb from the property line', 0, 15, 0.1, 'm', 1, 2],
+  'site.off': ['Setback from the face', 0, 40, 0.1, 'mm', 1000, 0],
+  'site.width': ['Street width', 3, 60, 0.5, 'mm', 1000, 0],
+  'site.curb': ['Curb from the property line', 0, 15, 0.1, 'mm', 1000, 0],
+  // a context building, or the size the next one is added at
+  'site.w': ['Width', 1, 150, 0.5, 'mm', 1000, 0],
+  'site.d': ['Depth', 1, 150, 0.5, 'mm', 1000, 0],
+  'site.h': ['Height', 1, 150, 0.5, 'mm', 1000, 0],
+  'site.x': ['Offset east (+) / west (−)', -300, 300, 0.5, 'mm', 1000, 0],
+  'site.y': ['Offset north (+) / south (−)', -300, 300, 0.5, 'mm', 1000, 0],
+  'site.a': ['Turn', -180, 180, 1, '°', 1, 0],
+  'site.gap': ['Distance to the building', 0, 500, 0.5, 'mm', 1000, 0],
+  // the window array, set on its bracket in the site view, and each side's SHGC
+  'g.arrN': ['Windows', 1, 200, 1, '', 1, 0],
+  'g.arrSp': ['Spacing', 0.3, 60, 0.05, 'mm', 1000, 0],
+  shgc: ['SHGC', 0.1, 0.36, 0.01, '', 1, 2],
   'g.shgc': ['SHGC', 0.1, SHGC_MAX, 0.01, '', 1, 2],
-  streetW: ['Street width', 4, 40, 0.5, 'm', 1, 1],
-  devHeight: ['Device height above street', 0, 60, 0.05, 'm', 1, 2],
-  curbDist: ['Face to curb', 0, 12, 0.1, 'm', 1, 1]
+  streetW: ['Street width', 4, 40, 0.5, 'mm', 1000, 0],
+  devHeight: ['Device height above street', 0, 60, 0.05, 'mm', 1000, 0],
+  curbDist: ['Face to curb', 0, 12, 0.1, 'mm', 1000, 0]
 };
 const specOf = k => SPEC[k] || (k.startsWith('site.') ? SPEC['site.' + k.split('.').pop()] : SPEC[k.split('.')[0]]);
 /* A long explanation is a tooltip on the name or button it explains, shown on
@@ -103,24 +126,11 @@ export function buildCalcBar(host) {
   <label class="barsel"><span class="tipped" title="Which windows the plan's floor, the 3D view's light, the sun chart's shading, the solar heat gain and its charts are for.">Results for</span> <select data-k="scope" id="c_scope">${Object.entries(SCOPES).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
   <label class="barsel">Sky ${seg('sky', [['clear', 'Clear day'], ['average', 'Average day'], ['recorded', 'Recorded day']], 'mini')}</label>
   <div class="tset">
-    <button type="button" class="minibtn tbtn" id="timeBtn" aria-expanded="false">Time settings <span class="arr">›</span></button>
-    <span class="barval"><span class="scrub" data-scrub="doy" title="Drag left or right to change the date">date</span> <span class="val" data-val="doy" tabindex="0" title="Click to type a date, e.g. Jun 21 or 6/21"></span></span>
-    <span class="barval"><span class="scrub" data-scrub="hour" title="Drag left or right to change the time">time</span> <span class="val" data-val="hour" tabindex="0" title="Click to type a time, e.g. 14:30"></span></span>
+    <span class="barslide"><span class="scrub" data-scrub="doy" title="Drag left or right to change the date">Date</span><input type="range" id="c_doy" data-k="doy" min="1" max="365" step="1" aria-label="Date"><span class="val" data-val="doy" tabindex="0" title="Click to type a date, e.g. Jun 21 or 6/21"></span></span>
+    <span class="barslide"><span class="scrub" data-scrub="hour" title="Drag left or right to change the time">Time</span><input type="range" id="c_hour" data-k="hour" min="0" max="24" step="${1 / 60}" aria-label="Time of day"><span class="val" data-val="hour" tabindex="0" title="Click to type a time, e.g. 14:30"></span></span>
     <select data-k="timeMode" id="c_timeMode" class="clocksel" aria-label="Clock" title="Solar time is the sun's own: noon is when it is due south. PST is the standard clock (UTC−8), PDT the summer clock an hour ahead."><option value="sol">Solar time</option><option value="lst">PST</option><option value="pdt">PDT</option></select>
-    <div class="tmenu" id="timeMenu" hidden>
-      <div class="ctl"><div class="ctlhd"><label for="c_doy">Date</label>
-        <span class="md"><input type="text" id="c_month" class="mdbox" spellcheck="false" aria-label="Month" title="Month: a number or a name">
-        <input type="text" id="c_day" class="mdbox day" spellcheck="false" aria-label="Day of the month"></span></div>
-        <input type="range" id="c_doy" data-k="doy" min="1" max="365" step="1"></div>
-      <div class="ctl"><div class="ctlhd"><label for="c_hour">Time of day</label>
-        <span class="val" data-val="hour" tabindex="0" title="Click to type a time, e.g. 14:30"></span></div>
-        <input type="range" id="c_hour" data-k="hour" min="0" max="24" step="${1 / 60}"></div>
-      <div class="seg"><button type="button" id="playBtn">Play day</button></div>
-      <p class="subhd">Sun angles</p>
-      <div class="ctl"><div class="ctlhd"><label>Altitude β</label><span class="val" data-val="sunAlt" tabindex="0" title="Click to type an altitude"></span></div></div>
-      <div class="ctl"><div class="ctlhd"><label><span class="tipped" title="From due south, east negative">Azimuth</span></label><span class="val" data-val="sunAz" tabindex="0" title="Click to type an azimuth, east negative"></span></div></div>
-    </div>
   </div>
+  <button type="button" class="playbtn" id="playBtn" title="Run the day from sunrise to sunset: the sun, the shadows and the light inside move with the clock. Click again to stop.">▶ Play day</button>
   <button type="button" class="minibtn" id="layoutReset" title="Put the drawings back in their first arrangement">Reset layout</button>
   <div class="gainrow" id="gainRow">
     <button type="button" class="tuck" id="gainTuck" title="Tuck the solar heat gain away" aria-expanded="true">▴</button>
@@ -137,18 +147,12 @@ export function buildRail(host) {
   <details class="grp" open><summary>Building Parameters</summary><div class="grpbody">
     <div class="ctl"><label for="c_typ"><span class="tipped" title="Choosing one replaces the building - floorplate, storeys and every side's glazing - and keeps the date, time and orientation. None comes with shading except the balconies: that is yours to design.">Typology template</span></label>
       <select id="c_typ" title="${TYPOLOGIES.blank.about}">${Object.entries(TYPOLOGIES).map(([k, t]) => `<option value="${k}"${k === 'blank' ? ' selected' : ''}>${t.label} - ${t.sub}</option>`).join('')}</select></div>
-    ${rng('rot', null, "The whole building turned from true north, clockwise: east +, west −. Every floor's rotation that is measured from it turns with it. Dragging the facade normal under the sun chart, or the facade arrow in the site view, turns this.")}
-    <p class="subhd">Working storey</p>
+    <p class="subhd"><span class="tipped" title="Click a storey's wall in the site view to work on it: drag it to move it, pull a face to resize it, turn it by its ring, click a figure to type it. The building turns by the arrow on the ground, or its north offset typed there.">Working storey</span></p>
     <div id="storeyHost" class="dyn"></div>
     <label class="chk"><input type="checkbox" data-k="matchPlate" id="c_matchPlate"><span class="tipped" title="The storeys above take this storey's height, slab, floorplate, rotation and offset - at once, and as they are changed. Off, this storey can differ from the ones above and below.">Match floors above</span></label>
     ${rng('sh')}
     ${rng('slabT', null, "The slab at the top of this storey, under the floor above. The glass stands between its sill and the slab, so a window is never taller than the storey less its slab and sill; glass set to full height runs up to it.")}
-    <p class="subhd"><span class="tipped" id="plateNote">Floorplate</span></p>
-    ${rng('plnRot', null, "This floor turned on its own, clockwise +, measured from what is chosen below. Every side's surface azimuth - and so every sun angle to its glass - follows from the building's north offset and this.")}
-    ${row('Rotation from', `<select data-k="rotRel" id="c_rotRel">${Object.entries(ROT_FROM).map(([k, l]) => `<option value="${k}">${l[0].toUpperCase() + l.slice(1)}</option>`).join('')}</select>`, "What the floor's rotation is measured from: the building's north offset (it turns with the building), the floor below (it turns with that floor - a run of floors each at +2° twists), or true north (it stays put however the building turns). Switching keeps the floor as it is and rewrites the figure.")}
-    ${rng('plnW')}${rng('plnD')}
-    ${row('Offset axes', `<select data-k="oxyIn" id="c_oxyIn">${Object.entries(OFFSET_FRAMES).map(([k, l]) => `<option value="${k}">${l[0].toUpperCase() + l.slice(1)}</option>`).join('')}</select>`, "The axes the offset is read along: this floor's own, turned with it (turning the floor swings it round the axis); the building's; the floor below's; or true north and east. Switching keeps the storey where it is and rewrites the figures.")}
-    ${rng('plnOX')}${rng('plnOY')}
+    <label class="chk"><input type="checkbox" data-k="rotBelow" id="c_rotBelow"><span class="tipped" title="On: this floor's turn is taken from the floor below, so it turns with it. With Match floors above on as well, turning a floor turns each floor above by as much again on the one below it - a twisting tower. Off: the floor's turn is from the building's north offset.">Rotate with floor below</span></label>
   </div></details>
 
   <details class="grp" open><summary><span class="tipped" title="The site boundary: a rectangle about the ground floor, each side set back from its wall face and each a street, a lane, an adjoining property line or open ground. Shading devices are read against it, and those that break the by-law turn red in the 3D views.">Site Parameters</span></summary><div class="grpbody">
@@ -192,7 +196,7 @@ const EXPORT_WORDS = { unit: 'The selected unit', storey: 'The selected storey, 
 /* ---------- the parts that change shape ---------- */
 /* one storey at a time: a menu of them, top of the building first, and the
    moves a stack of sheets allows - up or down a level, a copy above or below */
-const storeyWords = (s, i) => 'Storey ' + (i + 1) + ' · ' + fmt(s.h, 2) + ' m · ' + fmt(s.w, 1) + ' × ' + fmt(s.d, 1) + ' m · '
+const storeyWords = (s, i) => 'Storey ' + (i + 1) + ' · ' + fmt(s.h * 1000, 0) + ' · ' + fmt(s.w * 1000, 0) + ' × ' + fmt(s.d * 1000, 0) + ' mm · '
   + (Object.keys(FACADES).filter(f => s.cells[f]).join(' ') || 'blank');
 function storeyPanel(S) {
   const n = S.storeys.length, i = S.sel.st, full = n >= STOREYS_MAX;
@@ -214,7 +218,8 @@ function condPanel(S) {
   }
   const match = (S.sel.st < S.storeys.length - 1 ? `<label class="chk"><input type="checkbox" data-k="matchGlazing" id="c_matchGlazing"><span class="tipped" title="The storeys above take this side's glazing and shading - at once, and as it is edited.">Match floors above</span></label>` : '')
     + `<label class="chk"><input type="checkbox" data-k="matchSides" id="c_matchSides"><span class="tipped" title="The storey's other sides take this side's glazing and shading - at once, and as it is edited; with Match floors above on as well, so do every side of the storeys above. Sides with no glazing get it too.">Match all sides</span></label>`;
-  return row('Side', seg('selF', Object.keys(FACADES).map(f => [f, f]))) + unit + match;
+  // the side and the window are chosen by clicking them in the site view
+  return match;
 }
 const condSig = S => { const r = selCell(S), g = r && selUnitType(S) ? layoutGlazing(S, r) : null; return [S.sel.f, S.sel.st, S.storeys.length, S.sel.unit, g ? unitLayout(g, facadeLength(S, S.sel.f)).n : 0].join('|'); };
 /** what the floorplate note says: how this storey's sides stand against the storeys above and below */
@@ -284,10 +289,7 @@ function glzPanel(S) {
   let s = `<p class="subhd">Window system</p>`
     + row('System', `<div class="libpick">${pick('g.sys', systems)}${menu('newSystem', SYS_NEW, 'New…')}</div>`, linkTip(n, r.sys, 'sides'))
     + `<div class="seg wrap">${btn('dup', 'Duplicate', 'sys', '', 'A copy of this system under a new name, used here instead; the other sides keep the original')}${btn('delGlazing', 'Remove', '', 'quiet', 'Take the window system off this side')}</div>`
-    + nameBox('name.sys', 'Window system')
-    + row('Layout', seg('g.winBy', [['number', 'Number'], ['spacing', 'Spacing']])) + (y.winBy === 'spacing' ? rng('g.winSp') : rng('g.winN'))
-    + '<p class="hint" id="layNote"></p>'
-    + rng('g.wallT', null, 'The wall the windows stand in: under each sill, over each head up to the slab, and between windows that do not fill their bays.');
+    + nameBox('name.sys', 'Window system');
   s += '<p class="subhd">Glazing unit</p>' + unitBlock(S, 'win');
   const units = libOpts(S, 'units');
   if (!u) return s + '<p class="hint">This system has no glazing unit yet.</p>'
@@ -296,13 +298,9 @@ function glzPanel(S) {
   s += row(brk ? 'Unit (this window)' : 'Unit', `<div class="libpick">${pick('g.unit', units)}${menu('newUnit', UNIT_NEW, 'New…')}</div>`, linkTip(n, u.id, 'systems and windows'))
     + `<div class="seg">${btn('dup', 'Duplicate', 'unit', '', 'A copy of this unit under a new name, used here instead')}</div>`
     + nameBox('name.unit', 'Glazing unit')
-    + chk('g.fillW', 'Full bay width', 'The glass fills its bay, so there is no wall between it and the next unit: a window wall or a curtain wall. Otherwise the glass is never wider than its bay.')
-    + (u.fillW ? '' : rng('g.winW'))
-    + chk('g.fillH', 'Full height', 'The glass runs from its sill to the slab at the top of the storey. Otherwise it is never taller than the storey less its slab and sill.')
-    + (u.fillH ? '' : rng('g.winH')) + rng('g.sill')
     + (brk && !u.fillW ? rng('g.offU') : '')
-    + rng('g.reveal', null, 'Set-back glass is shaded by its own opening: the head acts as an overhang of that depth, the jambs as fins of it. Glass that fills its bay has no jambs, and its set-back is the slab edge standing proud of it - a window wall; flush, a curtain wall.')
-    + rng('g.shgc', null, SHGC_TIP) + '<p class="hint" id="unitNote"></p>';
+    + '<p class="hint"><span class="tipped" title="The window’s width is pulled at its jambs in the plan; its sill, its head and its set-back from the wall face are dragged in the section. Every figure there can be clicked and typed. They edit this unit type, and so every window that uses it.">Size, sill and set-back: in the plan and the section</span></p>'
+    + '<p class="hint" id="unitNote"></p>';
   return s;
 }
 const glzSig = S => {
@@ -331,29 +329,8 @@ function shdPanel(S) {
     + `<div class="seg">${btn('dup', 'Duplicate', 'dev', '', 'A copy of this device under a new name, used in this slot instead')}${btn('delDevice', 'Remove', '', 'quiet', 'Take this device out of the shading system')}</div>`
     + nameBox('d.name', deviceName(D));
   s += row('Member', seg('d.dir', [['h', 'Horizontal'], ['v', 'Vertical']]));
-  s += rng('d.depth') + rng('d.thick')
-    + rng('d.angle', null, h0 ? 'A positive angle drops the outer edge; the wall edge is then the top.' : 'A positive angle swings the outer edge right, seen from outside; the wall edge is then the left.')
-    + chk('d.lenRel', 'Relative to window', 'On, the member is the window’s own ' + (h0 ? 'width' : 'height') + ' plus the length beyond it - negative for shorter - and follows the window wherever the device is used. Off, its length is given outright. Switching keeps the member as long as it is.')
-    + (getValue('d.lenRel', S) ? rng('d.lenX', 'Length extension', 'Added to the window’s own ' + (h0 ? 'width' : 'height') + ', shared out by the justification: centred, half each side. Negative is shorter than the window.')
-      : rng('d.len', 'Length'));
-  s += row('Hinge', seg('d.hinge', [['start', HW.start], ['centre', HW.centre], ['end', HW.end]]),
-    'The member turns about its hinge, and the offset is measured to it; if the hinge would put part of the member into the wall, it is held out until it just clears.');
-  s += row('Horizontal justification', seg('d.justU', [['start', JUST_WORDS.u.start], ['centre', JUST_WORDS.u.centre], ['end', JUST_WORDS.u.end]]));
-  s += row('Vertical justification', seg('d.justV', [['start', JUST_WORDS.v.start], ['centre', JUST_WORDS.v.centre], ['end', JUST_WORDS.v.end]]));
-  s += `<label class="chk"><input type="checkbox" data-k="d.offOn" id="c_d.offOn"><span class="tipped" title="Move the member off its justification point">Offset</span></label>`;
-  if (D.offOn) s += rng('d.offU', 'Horizontal offset (right +)') + rng('d.offV', 'Vertical offset (up +)');
-  s += rng('d.offset');
-  s += '<p class="subhd">Array</p>';
-  if (!D.arr) s += `<div class="seg">${btn('createArray', 'Create array', '', '', 'Repeats the member ' + (h0 ? 'down the facade' : 'across the facade') + ' or out from the wall, anchored where it stands')}</div>`;
-  else {
-    s += row('Direction', seg('a.along', h0 ? [['facade', 'Down the facade'], ['out', 'Out from the wall']] : [['facade', 'Across the facade'], ['out', 'Out from the wall']]),
-      'The array keeps the member’s justification: ' + (D.arr.along === 'out' ? 'it runs out from the wall offset.' : h0 ? 'from the top it runs down, from the bottom up, from the centre both ways.' : 'from the left it runs right, from the right left, from the centre both ways.'));
-    s += row('Set out by', seg('a.mode', [['spacing', 'Spacing'], ['count', 'Number']]));
-    s += D.arr.mode === 'count' ? rng('a.count') : rng('a.spacing');
-    s += rng('a.len');
-    if (D.arr.mode !== 'count') s += `<label class="chk"><input type="checkbox" data-k="a.ends" id="c_a.ends"><span class="tipped" title="Add a member at the far end when the spacing does not divide the array evenly">Add member at end</span></label>`;
-    s += `<div class="seg">${btn('removeArray', 'Remove array', '', 'quiet')}</div>`;
-  }
+  // its figures are on the drawings, its behaviours in a popover there
+  s += '<p class="hint"><span class="tipped" title="Click the device in the plan or the section. Its depth, length, thickness and angle are dragged or typed there; it moves by its gumball, one axis at a time; and its alignment, justification, hinge and array are in the small window off its gumball.">Shape, position and array: in the plan and the section</span></p>';
   return s;
 }
 const shdSig = S => {
@@ -403,9 +380,22 @@ function sitePanel(S) {
     + rng('site.' + f + '.off', null, 'From the ground floor’s wall face to the property line on this side; also shown, and typed over, in the site view');
   if (isStreet(s)) h += rng('site.' + f + '.width', s.kind === 'lane' ? 'Lane width' : 'Street width', 'From this property line to the one across; under 10 m wide, a device may project into it only at 7.62 m and up')
     + rng('site.' + f + '.curb', null, 'From the property line to the outer face of the curb; a device must keep its outer edge 600 mm from it');
-  return h;
+  return h + contextBlock(sg);
 }
-const siteSig = S => { const sg = S.site || {}, f = sg.edit || 'S'; return f + '|' + (sg[f] ? sg[f].kind : ''); };
+/* Context massing: plain extrusions that may shade the building. Placed from
+   here - a ghost follows the pointer in the site view until the ground is
+   clicked - and then edited in the site view itself, once selected: dragged
+   to move, its faces pushed and pulled, turned by its ring, its figures typed
+   over, Delete to remove it. */
+function contextBlock(sg) {
+  const placing = VIEW.place.on;
+  return '<p class="subhd">Context massing</p>'
+    + `<div class="seg">${placing ? btn('cancelContext', 'Click the site view to place · Cancel', '', 'on', 'The ghost follows the pointer in the site view; click the ground to place it, or press Esc')
+      : btn('placeContext', 'Place Context Massing', '', 'primary', 'A massing that may shade the building. Drag this button straight onto the site view and let go to place it - or click it, then click the ground. Click a massing to select it: drag it to move, pull a face to resize, turn it by its ring, click a figure to type it, Delete to remove it.')}</div>`
+    + `<label class="chk"><input type="checkbox" data-k="site.ctxFollow" id="c_ctxFollow"><span class="tipped" title="On: the massing moves and turns with the building and its site. Off: it stays where it is in the world, whatever the building does. Switching keeps every massing where it stands now; the choice applies to what is changed after.">Context Massing Follows Building Rotation</span></label>`;
+}
+const siteSig = S => { const sg = S.site || {}, f = sg.edit || 'S';
+  return [f, sg[f] ? sg[f].kind : '', VIEW.place.on].join('|'); };
 
 const PANELS = [['siteHost', sitePanel, siteSig], ['storeyHost', storeyPanel, storeySig], ['condHost', condPanel, condSig], ['glzHost', glzPanel, glzSig],
   ['shdHost', shdPanel, shdSig], ['copyHost', copyPanel, copySig], ['libHost', libPanel, libPanelSig]];
@@ -419,6 +409,7 @@ function readout(k, S) {
   if (k === 'doy') { const md = monthDayOf(v); return MONTHS[md.m - 1] + ' ' + md.d; }
   if (k === 'sunAz') return fmt(v, 1) + '°' + (Math.abs(v) < 0.05 ? '' : v < 0 ? ' E' : ' W');
   if (k === 'rot') return Math.abs(v) < 0.05 ? 'true north · 0°' : fmt(Math.abs(v), 1) + '° ' + (v < 0 ? 'W' : 'E') + ' of N';
+  if (k === 'site.k.a') return Math.abs(v) < 0.05 ? '0°' : (v < 0 ? '−' : '+') + fmt(Math.abs(v), 0) + '°';
   if (k === 'plnRot') return Math.abs(v) < 0.05 ? '0°' : (v < 0 ? '−' : '+') + fmt(Math.abs(v), 1) + '°';
   if (k === 'd.lenX') return (v < -0.0005 ? '−' : '+') + fmt(Math.abs(v) * 1000, 0) + ' mm · ' + fmt((openingDim(S) + v) * 1000, 0) + ' mm long';
   if (k === 'a.len' && v <= 0) return 'single member';
@@ -447,10 +438,10 @@ export function syncClock(S) {
   syncDate(S);
 }
 function syncDate(S) {
-  const md = monthDayOf(S.doy), mo = document.getElementById('c_month'), dy = document.getElementById('c_day');
-  document.getElementById('c_doy').value = S.doy;
-  if (document.activeElement !== mo) mo.value = MONTHS[md.m - 1];
-  if (document.activeElement !== dy) dy.value = md.d;
+  const md = monthDayOf(S.doy), mo = document.getElementById('c_month'), dy = document.getElementById('c_day'), dd = document.getElementById('c_doy');
+  if (dd) dd.value = S.doy;
+  if (mo && document.activeElement !== mo) mo.value = MONTHS[md.m - 1];
+  if (dy && document.activeElement !== dy) dy.value = md.d;
 }
 
 export function syncRail(S) {
@@ -567,7 +558,9 @@ export function openFloatEdit(el, k, S, api) {
   const [, min, max, , unit, mul, dec] = sp, r = el.getBoundingClientRect();
   const box = document.createElement('input');
   box.type = 'text'; box.className = 'floatedit'; box.spellcheck = false;
-  box.value = (getValue(k, S) * mul).toFixed(dec).replace(/\.?0+$/, '') || '0';
+  // the figure as shown: a whole number of millimetres stays whole - only zeros after a decimal point go
+  const shown = (getValue(k, S) * mul).toFixed(dec);
+  box.value = (shown.includes('.') ? shown.replace(/0+$/, '').replace(/\.$/, '') : shown) || '0';
   Object.assign(box.style, { left: Math.round(r.left + window.scrollX) + 'px', top: Math.round(r.top + window.scrollY - 2) + 'px', minWidth: Math.round(Math.max(56, r.width)) + 'px' });
   document.body.appendChild(box);
   box.focus(); box.select();
@@ -578,6 +571,28 @@ export function openFloatEdit(el, k, S, api) {
     const n = parseFloat(box.value.replace(',', '.').replace(/[^0-9.\-]/g, '')) / mul;
     box.remove();
     if (commit && isFinite(n)) api.set(k, clamp(n, min, max)); else api.refresh();
+  };
+  box.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') close(true); else if (e.key === 'Escape') close(false); });
+  box.addEventListener('blur', () => close(true));
+}
+/* A gumball arrow clicked: a box opens at it for how far to move, in mm, the
+   way the arrow points - wherever the device already stands. */
+export function openNudge(x, y, g, S, api) {
+  const sp = specOf(g.key);
+  if (!sp) return;
+  // an arrow moves by millimetres along itself; the turning arc turns by degrees
+  const [, min, max] = sp, box = document.createElement('input'), per = g.rot ? 1 : 1 / 1000, sg = g.rot ? 1 : g.sgn;
+  box.type = 'text'; box.className = 'floatedit'; box.spellcheck = false; box.placeholder = g.rot ? 'turn °' : 'move mm';
+  Object.assign(box.style, { left: Math.round(x + window.scrollX + 10) + 'px', top: Math.round(y + window.scrollY - 12) + 'px', minWidth: '78px' });
+  document.body.appendChild(box);
+  box.focus();
+  let done = false;
+  const close = commit => {
+    if (done) return;
+    done = true;
+    const n = parseFloat(box.value.replace(',', '.').replace(/[^0-9.\-]/g, ''));
+    box.remove();
+    if (commit && isFinite(n) && n !== 0) api.set(g.key, clamp(getValue(g.key, S) + sg * n * per, min, max)); else api.refresh();
   };
   box.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') close(true); else if (e.key === 'Escape') close(false); });
   box.addEventListener('blur', () => close(true));

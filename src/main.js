@@ -1,4 +1,4 @@
-/* Vancouver Solar Shading Explorer 7 - the page.
+/* Vancouver Solar Shading Explorer 8 - the page.
 
    The page takes the question in four steps: where the sun is, what
    the shading cuts off, where the beam lands inside, and how much heat comes
@@ -10,10 +10,11 @@
 
 import { fmt, hhmm, MONTHS, wrap180, D2R } from './util.js';
 import { CLOCK_NAME, sunriseSunsetSolar, solarToClock } from './solar.js';
-import { S, setValue, applyTypology, createHistory, addStorey, duplicateStorey, removeStorey, moveStorey, removeGlazing,
+import { S, setValue, getValue, applyTypology, createHistory, addStorey, duplicateStorey, removeStorey, moveStorey, removeGlazing,
   addDevice, addSavedDevice, removeDevice, createArray, removeArray, applyShadingPreset, copyCondition, selCell, breakUnit, rebindUnit, rebindAll, otherBroken, matchAbove,
   newSystemHere, useSystem, newUnitHere, duplicateHere, deleteEntry,
-  saveWindow, openWindow, selectionChanged, keepCuts, windowState, savedWindow, removeWindow, renameWindow, windowName, windowSavedAs, selUnitIndex, shadingFromIdeal } from './state.js';
+  saveWindow, openWindow, selectionChanged, keepCuts, windowState, savedWindow, removeWindow, renameWindow, windowName, windowSavedAs, selUnitIndex, shadingFromIdeal,
+  addContextAt, removeContext, putContext, duplicateContext, instanceContext, makeUnique, pullContext, turnContext, contextGroup, plateTo } from './state.js';
 import { V, AX_LAYERS } from './view.js';
 import { buildFrame } from './frame.js';
 import { SCOPES } from './geometry/building.js';
@@ -24,22 +25,22 @@ import { maskStale, getMask, envStale, getEnvelopes, resetStudies, getDayGain, d
   getFloor, floorStale, resetGains, getRegion, getHourly } from './studies.js';
 import { SKIES, beamAt, unitGain, targetGain, floorNow, landing } from './energy.js';
 import { drawSunPath, clearSunCache, DOT_SPANS } from './draw/sunpath.js';
-import { drawSection, sectionHandle, secCutLine } from './draw/section.js';
-import { drawPlan, INTERIOR_MODES, planHandle, planCutLine } from './draw/plan.js';
+import { drawSection, sectionHandle, secCutLine, sectionGrips, sectionDevHits, sectionPop } from './draw/section.js';
+import { drawPlan, INTERIOR_MODES, planHandle, planCutLine, planGrips, planDevHits, planPop } from './draw/plan.js';
 import { SHEETCAM0 } from './draw/sheetcam.js';
 import { drawDetail, DETAIL_VIEWS, detailSun, detailHits, detailEye } from './draw/detail.js';
-import { drawAxon, axonHits, axonHandle, axonFocus } from './draw/axon.js';
+import { drawAxon, axonHits, axonHandle, axonFocus, axonCtxHits, axonCtxEdit, axonCamera, axonPlateEdit } from './draw/axon.js';
 import { drawSunYear } from './draw/sunyear.js';
 import { chartGainDay, chartGainYear, chartShadeYear } from './draw/charts.js';
 import { WEATHER_FILES } from './weather.js';
 import { titleBlock, setSheet, SHEET0 } from './draw/svg.js';
 import { sheetFor, buildLayout, wireLayout, margins, removeView, saveLayout } from './ui/layout.js';
-import { createView, VIEW_TYPES } from './ui/views.js';
-import { openFloatEdit, buildRail, buildCalcBar, RESULT_SCOPES, syncRail, syncClock, wireRail, copyUI, brkUI, regsControls } from './ui/rail.js';
+import { createView, VIEW_TYPES, devicePopHTML, windowPopHTML } from './ui/views.js';
+import { openFloatEdit, openNudge, buildRail, buildCalcBar, RESULT_SCOPES, syncRail, syncClock, wireRail, copyUI, brkUI, regsControls } from './ui/rail.js';
 import { stackLabel } from './ui/readout.js';
 import { recSun, recGeometry, recBylaw, recFor, resGain, fxUI, recUI, idealSpec } from './ui/calc.js';
 import { renderChecks, renderEnergy, staticProse } from './ui/prose.js';
-import { wireView } from './ui/interact.js';
+import { wireView, viewPoint } from './ui/interact.js';
 import { exportRhino } from './export/rhino.js';
 
 const $ = id => document.getElementById(id);
@@ -69,10 +70,25 @@ function makeInst(type, pin = null) {
     });
   }
   if (type === 'detail') {
-    q('.detBeam').addEventListener('click', e => { inst.V.beam = !inst.V.beam; e.target.textContent = inst.V.beam ? 'Hide the beam' : 'Show the beam'; paint(inst); });
+
     q('.detReset').addEventListener('click', () => { Object.assign(inst.V.detcam, DETAIL_VIEWS.outside); paint(inst); });
   }
   if (type === 'section') q('.secReset').addEventListener('click', () => { inst.V.seccam = SHEETCAM0('window'); paint(inst); });
+  // a member added from the drawing's own bar: one, picked, its window open
+  const ad = q('.addShd');
+  if (ad) ad.addEventListener('click', () => {
+    stopPlay(); H.mark('device');
+    if (addDevice(ad.dataset.dir === 'v' ? 'v' : 'h')) { const r = selCell(); pickOnly(r ? r.dev || 0 : 0, inst); }
+    schedule();
+  });
+  // the bay alone or the whole floor; the edit handles shown or not - each view its own
+  const wh = inst.el.querySelector('.vWhole'), vb = inst.el.querySelector('.vBeam');
+  // the sunlight that gets in, shaded and outlined - or left to its grey outline
+  if (vb) vb.addEventListener('change', e => { inst.V.beam = e.target.checked; paint(inst); });
+  // the site's lines standing up from the boundary, on request
+  const vs = inst.el.querySelector('.vSite');
+  if (vs) vs.addEventListener('change', e => { inst.V.site = e.target.checked; paint(inst); });
+  if (wh) wh.addEventListener('change', e => { inst.V.whole = e.target.checked; inst.V.detcam.whole = e.target.checked; paint(inst, true); });
   if (type === 'plan') {
     q('.planReset').addEventListener('click', () => { inst.V.plancam = SHEETCAM0('window'); paint(inst); });
     q('.inModes').addEventListener('click', e => { const b = e.target.closest('[data-mode]'); if (!b) return; inst.V.inMode = b.dataset.mode; schedule(); });
@@ -113,7 +129,21 @@ function makeInst(type, pin = null) {
     }, true);
     setPin(inst, inst.pin);
   }
-  wireView(inst, { S, V, H, schedule, scheduleLight, paint: i => paint(i), stopPlay, select });
+  wireView(inst, { S, V, H, schedule, scheduleLight, paint: i => paint(i), stopPlay, select, placeContext, selectContext,
+    putContext: (id, C, a, dims) => { putContext(S, id, C, a, dims); scheduleLight(); },
+    duplicateContext: id => { const nid = duplicateContext(id); schedule(); return nid; },
+    pullContext: (id, key, dim, snaps) => { pullContext(S, id, key, dim, snaps); scheduleLight(); },
+    turnContext: (id, a, snaps) => { turnContext(S, id, a, snaps); scheduleLight(); },
+    askInstance, contextMenu,
+    // the selected storey, edited in the site view
+    plateTo: o => { plateTo(S, o); scheduleLight(); },
+    pick,
+    // an array dragged down to nothing goes back to one member when it is let go
+    endArray: () => { if (arrayGone('a.len', getValue('a.len'))) { setValue('a.on', false); schedule(); } },
+    togglePop: i => { POP.at = i; POP.st = 'open'; paint(i); },
+    nudge: (g, x, y) => openNudge(x, y, g, S, api),
+    selectPlate: (f, st, unit = null) => { if (S.site && S.site.ctxSel) setValue('site.ctxSel', null); V.plate.on = true; select(f, st, unit); },
+    endPlate: () => { V.plate.on = false; } });
   return inst;
 }
 
@@ -180,6 +210,66 @@ function pinnedBars() {
 }
 /** a figure in a view's title that is read at a glance */
 const big = v => '<strong class="tbig">' + v + '</strong>';
+/* The picked device's small window: one on the page, hung off the gumball
+   of the view it was picked or reopened in. It opens when a device is
+   picked and goes when it is let go; its title moves it anywhere on the
+   page, it folds, and it closes - the gumball's centre opens it again.    */
+const devpop = document.createElement('div');
+devpop.className = 'devpop'; devpop.hidden = true;
+document.body.appendChild(devpop);
+const POP = { at: null, st: 'closed', xy: null };
+function devPop(inst, F) {
+  if (inst !== POP.at) return;
+  const P = inst.h.pop, isWin = !!(P && P.kind === 'window' && F.pick === 'window');
+  if (!(P && (isWin || F.selD) && POP.st !== 'closed')) { devpop.hidden = true; return; }
+  const min = POP.st === 'min', html = isWin ? windowPopHTML(F.m, min) : devicePopHTML(F.selD, P.ax, P.arrayView, min);
+  if (devpop._html !== html) { devpop.innerHTML = html; devpop._html = html; }
+  devpop.classList.toggle('min', min);
+  if (!min && devpop.style.width) devpop.style.width = '';
+  devpop.hidden = false;
+  const w = devpop.offsetWidth, h = devpop.offsetHeight;
+  let x, y;
+  if (POP.xy) [x, y] = POP.xy;                     // where it was moved to
+  else {
+    const svgEl = inst.host.querySelector('svg'), ctm = svgEl && svgEl.getScreenCTM && svgEl.getScreenCTM();
+    if (!ctm) return;
+    const pt = svgEl.createSVGPoint(); pt.x = P.x; pt.y = P.y;
+    const c = pt.matrixTransform(ctm);
+    // beside the gumball
+    x = c.x + 18; y = c.y + 18;
+    if (x + w > innerWidth - 4) x = c.x - 18 - w;
+    if (y + h > innerHeight - 4) y = c.y - 18 - h;
+  }
+  // kept on the screen
+  x = clampN(x, 4, innerWidth - w - 4); y = clampN(y, 4, innerHeight - h - 4);
+  devpop.style.left = Math.round(x) + 'px'; devpop.style.top = Math.round(y) + 'px';
+}
+/** a device picked - in the panel, or on a drawing; picked afresh, its window opens */
+function pickOnly(i, inst) {
+  const r = selCell();
+  if (S.pick !== 'device' || (r && (r.dev || 0) !== i)) { POP.st = 'open'; POP.xy = null; }
+  POP.at = inst || POP.at || insts().find(x => x.type === 'section' || x.type === 'plan') || null;
+  if (r) r.dev = i;
+  S.pick = 'device';
+}
+/** an array with nothing left to repeat: no length, a single member by number, or no spacing */
+function arrayGone(k, v) {
+  if (!getValue('a.on')) return false;
+  return (k === 'a.arrSp' && !(v > 0)) || !(getValue('a.len') > 0.004) || (getValue('a.mode') === 'count' && getValue('a.arrN') <= 1);
+}
+/** a click on a plan or a section: the window and its wall, a device, or nothing - which hides every handle */
+function pick(i, inst) {
+  if (i === null) { if (!S.pick) return; S.pick = null; }
+  else if (i === 'site') S.pick = 'site';
+  else if (i === 'win') {
+    // the window picked - or clicked again - opens its own small window
+    if (S.pick !== 'window') POP.xy = null;
+    POP.st = 'open'; POP.at = inst || POP.at; S.pick = 'window';
+  }
+  else pickOnly(i, inst);
+  if (!S.pick) devpop.hidden = true;
+  schedule();
+}
 function drawInst(inst, F0, ctx) {
   // a saved window's view draws its own window and cuts - the selection's frame when it is the selection
   if (inst.pin && !savedWindow(S, inst.pin)) setPin(inst, null);
@@ -193,7 +283,7 @@ function drawInst(inst, F0, ctx) {
   const study = mode => { if (!(sk(mode) in ctx.studies)) ctx.studies[sk(mode)] = roomStudy(F, ctx.dni, ctx.light, mode); return ctx.studies[sk(mode)]; };
   switch (inst.type) {
     case 'axon':
-      inst.host.innerHTML = drawAxon(Fi); inst.h = { hits: axonHits, handle: axonHandle, focus: axonFocus };
+      inst.host.innerHTML = drawAxon(Fi); inst.h = { hits: axonHits, handle: axonHandle, focus: axonFocus, ctxHits: axonCtxHits, ctxEdit: axonCtxEdit, plateEdit: axonPlateEdit };
       inst.title.innerHTML = titleBlock('Site angles', [
         ['β', cur.up ? fmt(cur.alt, 1) + '°' : 'sun down'], ['solar azimuth', cur.up ? fmt(wrap180(cur.az - 180), 1) + '° from S' : '—'], ['γ', cur.up ? fmt(-cur.gamma, 1) + '°' : '—']]);
       break;
@@ -205,12 +295,14 @@ function drawInst(inst, F0, ctx) {
         ['plotted', dateStr + ' ' + hhmm(S.hour) + ' ' + CLOCK_NAME[S.timeMode]]]);
       break;
     case 'section':
-      inst.host.innerHTML = drawSection(Fi, study('now')); inst.h = { handle: sectionHandle, cut: secCutLine };
+      inst.host.innerHTML = drawSection(Fi, study('now')); inst.h = { handle: sectionHandle, cut: secCutLine, grips: sectionGrips, devHits: sectionDevHits, pop: sectionPop };
+      devPop(inst, F);
       inst.title.innerHTML = titleBlock('Section · profile angle', [
         ['θ', cur.onFacade ? fmt(cur.vsa, 1) + '°' : 'no direct sun'], ['device', stackLabel(F)], ['shaded', pct]]);
       break;
     case 'plan':
-      inst.host.innerHTML = drawPlan(Fi, study(inst.V.inMode)); inst.h = { handle: planHandle, cut: planCutLine };
+      inst.host.innerHTML = drawPlan(Fi, study(inst.V.inMode)); inst.h = { handle: planHandle, cut: planCutLine, grips: planGrips, devHits: planDevHits, pop: planPop };
+      devPop(inst, F);
       inst.title.innerHTML = titleBlock('Plan · γ and floor sun', [
         ['γ', cur.up ? fmt(-cur.gamma, 1) + '°' : '—'], ['floor', INTERIOR_MODES[inst.V.inMode].toLowerCase()], ['condition', where]]);
       inst.el.querySelectorAll('.inModes button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === inst.V.inMode)));
@@ -233,7 +325,7 @@ function drawInst(inst, F0, ctx) {
         inst._beam = !m.opening ? [] : [['into the room', big(cur.onFacade ? fmt(land ? land.total : 0, 0) + ' W' : 'no sun')],
           ['on the floor', big(lit ? fmt(land.dni * m.shgc * Math.sin(cur.alt * D2R), 0) + ' W/m²' : '—')]];
       }
-      inst.title.innerHTML = titleBlock('Storey in 3D', [
+      inst.title.innerHTML = titleBlock('Window in 3D', [
         ['system', m.opening ? (m.glz.sysName || 'glazing').toLowerCase() : 'none'], ['sun on the glass', big(m.opening && cur.onFacade ? fmt((1 - cur.frac) * 100, 0) + '%' : 'none')]].concat(inst._beam || []));
       break;
     }
@@ -370,11 +462,11 @@ const DAY_SECONDS = 13;
 function stopPlay() {
   if (!anim) return;
   cancelAnimationFrame(anim.raf); anim = null;
-  $('playBtn').textContent = 'Play the day';
+  $('playBtn').textContent = '▶ Play day'; $('playBtn').classList.remove('on');
 }
 function togglePlay() {
   if (anim) { stopPlay(); render(); return; }
-  $('playBtn').textContent = 'Stop';
+  $('playBtn').textContent = '■ Stop'; $('playBtn').classList.add('on');
   const ss = sunriseSunsetSolar(S.doy);
   const a = ss ? Math.max(0, solarToClock(ss[0], S.doy, S.timeMode) - 0.4) : 4;
   const b = ss ? Math.min(24, solarToClock(ss[1], S.doy, S.timeMode) + 0.4) : 20;
@@ -432,6 +524,98 @@ function select(f, st, unit) {
   recentre(); schedule();
 }
 
+/* ---------- context buildings: placed by a click in the site view, picked by one ---------- */
+const siteViews = () => insts().filter(i => i.type === 'axon');
+function endPlacing() { V.place.on = false; V.place.P = null; document.querySelectorAll('.view .v3dhost.placing').forEach(h => h.classList.remove('placing')); }
+function placeContext(P) { stopPlay(); H.mark('ctx:place'); addContextAt(P); endPlacing(); openSite(); schedule(); }
+function selectContext(id) { stopPlay(); setValue('site.ctxSel', id); if (id) V.plate.on = false; schedule(); }
+/** the panel's Site Parameters opened, so the building just placed or picked can be set */
+function openSite() { const d = $('siteHost') && $('siteHost').closest('details'); if (d) d.open = true; }
+/* A small menu at the pointer, closed by a click anywhere else or by Esc. */
+let popMenu = null;
+function closePop() { if (popMenu) { const m = popMenu; popMenu = null; m.remove(); if (m._onClose) m._onClose(); } }
+function openPop(x, y, html, onClose) {
+  closePop();
+  const m = document.createElement('div');
+  m.className = 'ctxmenu'; m.innerHTML = html; m._onClose = onClose;
+  Object.assign(m.style, { left: Math.round(x + window.scrollX + 4) + 'px', top: Math.round(y + window.scrollY + 4) + 'px' });
+  document.body.appendChild(m);
+  // kept on the screen
+  const r = m.getBoundingClientRect();
+  if (r.right > window.innerWidth - 8) m.style.left = Math.round(window.innerWidth - r.width - 8 + window.scrollX) + 'px';
+  if (r.bottom > window.innerHeight - 8) m.style.top = Math.round(window.innerHeight - r.height - 8 + window.scrollY) + 'px';
+  popMenu = m;
+  return m;
+}
+document.addEventListener('pointerdown', e => { if (popMenu && !popMenu.contains(e.target)) closePop(); }, true);
+/** an Alt-drag let go: the massing it left is a copy - its own - or an instance, which takes the other's pushes and pulls */
+function askInstance(fromId, id, x, y) {
+  const m = openPop(x, y, '<p>The massing dragged off is</p><button type="button" data-ci="copy" title="Its own massing: edits to one do not touch the other">A copy</button>'
+    + '<button type="button" data-ci="inst" title="An instance: a face pushed or pulled on one is pushed or pulled on all its instances, each in its own axes. Where each stands is its own.">An instance</button>');
+  m.addEventListener('click', e => {
+    const b = e.target.closest('[data-ci]');
+    if (!b) return;
+    if (b.dataset.ci === 'inst') { H.mark('ctx:instance'); instanceContext(S, fromId, id); schedule(); }
+    closePop();
+  });
+}
+/** a massing right-clicked: its instance menu */
+function contextMenu(id, x, y) {
+  const c = ((S.site && S.site.ctx) || []).find(k => k.id === id);
+  if (!c) return;
+  if (S.site.ctxSel !== id) selectContext(id);
+  const n = contextGroup(S, id).length, inst = n > 1, why = inst ? '' : ' title="Only an instance has this: Alt-drag a massing and choose An instance"';
+  const m = openPop(x, y, `<p>${inst ? 'Instance · one of ' + n : 'Massing · not an instance'}</p>`
+    + `<label class="chk"${why}><input type="checkbox" data-ci="rot"${c.inheritRot ? ' checked' : ''}${inst ? '' : ' disabled'}><span class="tipped" title="On: turning this massing turns its other instances by as much, each about its own middle. Set instance by instance - another instance can leave it off, and its turns stay its own.">Instances Inherit Rotation</span></label>`
+    + `<button type="button" data-ci="unique"${inst ? '' : ' disabled'}${why}>Make Unique</button>`);
+  m.addEventListener('change', e => { if (e.target.dataset.ci === 'rot') { H.mark('ctx:inheritRot'); c.inheritRot = e.target.checked; schedule(); } });
+  m.addEventListener('click', e => { const b = e.target.closest('button[data-ci="unique"]'); if (!b || b.disabled) return; H.mark('ctx:unique'); makeUnique(S, id); schedule(); closePop(); });
+}
+
+/* The Place Context Massing button can also be dragged straight out: the
+   ghost follows the pointer over the site view, and letting go there places
+   the massing; let go anywhere else, nothing is placed. A plain click still
+   waits for a click in the site view. */
+let swallowClick = false;
+document.addEventListener('click', e => { if (swallowClick) { swallowClick = false; e.stopPropagation(); e.preventDefault(); } }, true);
+document.addEventListener('pointerdown', e => {
+  const b = e.target.closest && e.target.closest('[data-act="placeContext"]');
+  if (!b || e.button !== 0) return;
+  const x0 = e.clientX, y0 = e.clientY;
+  let dragging = false;
+  const viewAt = ev => { const el = document.elementFromPoint(ev.clientX, ev.clientY), v = el && el.closest('.view[data-type=axon]'); return v && v._inst; };
+  const groundOf = (inst, ev) => { const p = viewPoint(inst.host, ev); return p ? axonCamera(S, inst.V.axcam).ground(p[0], p[1]) : null; };
+  const move = ev => {
+    if (!dragging && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 6) return;
+    if (!dragging) { dragging = true; stopPlay(); V.place.on = true; V.place.P = null; document.body.classList.add('placedrag'); schedule(); }
+    const inst = viewAt(ev);
+    V.place.P = inst ? groundOf(inst, ev) : null;
+    for (const i of siteViews()) paint(i);
+  };
+  const up = ev => {
+    window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
+    document.body.classList.remove('placedrag');
+    if (!dragging) return;
+    swallowClick = true; setTimeout(() => { swallowClick = false; }, 0);
+    const inst = viewAt(ev), P = inst && groundOf(inst, ev);
+    if (P) placeContext(P); else { endPlacing(); schedule(); }
+  };
+  window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+  e.preventDefault();
+}, true);
+
+// Esc stops placing, or lets the selected massing go; Delete or Backspace removes the selected one
+document.addEventListener('keydown', e => {
+  const t = e.target, typing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+  if (e.key === 'Escape' && popMenu) { closePop(); return; }
+  if (e.key === 'Escape' && V.place.on) { endPlacing(); schedule(); return; }
+  if (e.key === 'Escape' && V.plate.on && !(S.site && S.site.ctxSel)) { V.plate.on = false; schedule(); return; }
+  const id = S.site && S.site.ctxSel;
+  if (!id || typing) return;
+  if (e.key === 'Escape') { setValue('site.ctxSel', null); schedule(); return; }
+  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); stopPlay(); H.mark('ctx:delete'); removeContext(id); schedule(); }
+});
+
 /* ---------- the panel's actions ---------- */
 const ACTS = {
   selStorey: a => { const i = +a; if (i < 0 || i >= S.storeys.length) return; S.sel.st = i; S.sel.unit = null; brkUI.pending = false; recentre(); },
@@ -449,7 +633,7 @@ const ACTS = {
   rebindApplyKeep: part => { H.mark('break'); rebindUnit('apply', 'keep', S, part); brkUI.pending = false; matchAbove(); },
   rebindCancel: () => { brkUI.pending = false; },
   rebindAll: part => { H.mark('break'); rebindAll(S, part); matchAbove(); },
-  selDevice: a => { const r = selCell(); if (r) r.dev = +a; },
+  selDevice: a => { pickOnly(+a, null); },
   addStorey: () => { H.mark('storey'); addStorey(); recentre(); },
   dupStorey: a => { H.mark('storey'); duplicateStorey(S, a === 'below' ? 'below' : 'above'); recentre(); },
   moveStorey: a => { H.mark('storey'); moveStorey(+a); recentre(); },
@@ -481,7 +665,11 @@ const ACTS = {
       + (r.skipped.length ? ' Passed over: ' + r.skipped.join('; ') + '.' : '');
   },
   copyClear: () => { copyUI.targets.clear(); copyUI.note = ''; },
-  delWindow: a => { H.mark('saveview'); removeWindow(a); for (const i of insts()) if (i.pin === a) setPin(i, null); }
+  delWindow: a => { H.mark('saveview'); removeWindow(a); for (const i of insts()) if (i.pin === a) setPin(i, null); },
+  // a context building: placed with a click in the site view - or, with none on the page, just south of the site
+  placeContext: () => { if (siteViews().length) { V.place.on = true; V.place.P = null; } else { H.mark('ctx:place'); addContextAt(null); } },
+  cancelContext: () => endPlacing(),
+  delContext: a => { H.mark('ctx:delete'); removeContext(a); }
 };
 
 /* A name box that suggests a name - in grey, as its placeholder - takes it
@@ -494,6 +682,36 @@ document.addEventListener('keydown', e => {
   t.value = t.placeholder; t.setSelectionRange(t.value.length, t.value.length);
   t.dispatchEvent(new Event('input', { bubbles: true }));
 }, true);
+
+// Escape lets go of what is picked, and every handle with it
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || (e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName))) return;
+  if (S.pick) pick(null);
+});
+
+// the device's window: its title moves it anywhere on the page, its buttons fold or close it
+devpop.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  const act = e.target.closest('[data-popact]');
+  if (act) {
+    e.preventDefault();
+    POP.st = act.dataset.popact === 'close' ? 'closed' : POP.st === 'min' ? 'open' : 'min';
+    // folded, it keeps its width, so its buttons stay under the pointer
+    devpop.style.width = POP.st === 'min' ? devpop.offsetWidth + 'px' : '';
+    if (POP.st === 'closed') devpop.hidden = true;
+    if (POP.at) paint(POP.at);
+    return;
+  }
+  if (!e.target.closest('.dvhd')) return;
+  e.preventDefault();
+  const x0 = e.clientX, y0 = e.clientY, l0 = devpop.offsetLeft, t0 = devpop.offsetTop;
+  const move = ev => {
+    const x = clampN(l0 + ev.clientX - x0, 4, innerWidth - devpop.offsetWidth - 4), y = clampN(t0 + ev.clientY - y0, 4, innerHeight - devpop.offsetHeight - 4);
+    devpop.style.left = x + 'px'; devpop.style.top = y + 'px'; POP.xy = [x, y];
+  };
+  const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
+  addEventListener('pointermove', move); addEventListener('pointerup', up);
+});
 
 /* ---------- boot ---------- */
 buildRail($('rail'));
@@ -515,7 +733,12 @@ document.addEventListener('click', e => {
   }
 });
 const api = {
-  set(k, v) { stopPlay(); H.mark('c:' + k); setValue(k, v); schedule(); },
+  set(k, v) {
+    stopPlay(); H.mark('c:' + k); setValue(k, v);
+    // an array typed down to nothing goes back to one member
+    if ((k === 'a.len' || k === 'a.arrN' || k === 'a.arrSp') && arrayGone(k, v)) setValue('a.on', false);
+    schedule();
+  },
   // a value slid by its name: drawn lightly as it moves, settled when let go
   scrub(k, v) { stopPlay(); H.mark('c:' + k); H.hold = true; setValue(k, v); scheduleLight(); },
   scrubEnd() { H.release(); schedule(); },
@@ -541,6 +764,15 @@ document.addEventListener('click', e => {
   const k = el.getAttribute('data-edit'), txt = el.tagName.toLowerCase() === 'text' ? el : el.nextElementSibling || el;
   openFloatEdit(txt, k, S, api);
 });
+// a choice on a drawing's bar pressed: it sets its value, as the panel would - on the press, since the
+// drawing can be redrawn under the pointer before it is let go
+document.addEventListener('pointerdown', e => {
+  const el = e.button === 0 && e.target.closest && e.target.closest('.view [data-set], .devpop [data-set]');
+  if (!el) return;
+  e.stopPropagation();
+  const v = el.getAttribute('data-v');
+  api.set(el.getAttribute('data-set'), v === 'true' ? true : v === 'false' ? false : v);
+});
 // the panel at the side and the settings along the top each tuck away, and come back
 const TUCKED = { railTuck: 'the panel', barTuck: 'the calculation settings', gainTuck: 'the solar heat gain' };
 for (const [btn, cls, open, shut] of [['railTuck', 'railtucked', '‹', '›'], ['barTuck', 'bartucked', '▴', '▾'], ['gainTuck', 'gaintucked', '▴', '▾']]) $(btn).addEventListener('click', () => {
@@ -549,14 +781,9 @@ for (const [btn, cls, open, shut] of [['railTuck', 'railtucked', '‹', '›'], 
   $(btn).title = (on ? 'Bring back ' : 'Tuck away ') + TUCKED[btn];
   barHeight(); fitFull(); fitDock(); clearSunCache(); render();
 });
-$('timeBtn').addEventListener('click', () => {
-  const m = $('timeMenu'), open = m.hidden;
-  m.hidden = !open; $('timeBtn').setAttribute('aria-expanded', String(open));
-});
 // the time settings and a view's note close when the page is clicked anywhere else
 document.addEventListener('pointerdown', e => {
   const t = e.target;
-  if (!$('timeMenu').hidden && !t.closest('.tset') && !t.closest('.floatedit')) { $('timeMenu').hidden = true; $('timeBtn').setAttribute('aria-expanded', 'false'); }
   document.querySelectorAll('.infopop:not([hidden])').forEach(p => {
     if (!p.contains(t) && !(t.closest('[data-info]') && t.closest('.view') === p.closest('.view'))) { p.hidden = true; p.closest('.view').querySelector('[data-info]').setAttribute('aria-expanded', 'false'); }
   });
@@ -622,7 +849,7 @@ window.addEventListener('resize', () => { barHeight(); clearTimeout(resizeT); re
    edge is dragged to resize it; it collapses to its bar, or goes full screen
    over the drawings - the panel and the settings bar stay. How it was left is
    kept in this browser. */
-const DOCK_KEY = 'solar-shading-dock-v7';
+const DOCK_KEY = 'solar-shading-dock-v8';
 const dock = { h: Math.round(window.innerHeight * 0.38), min: false, full: false };
 try { Object.assign(dock, JSON.parse(localStorage.getItem(DOCK_KEY) || '{}'), { full: false }); } catch (_) { }
 function fitDock() {

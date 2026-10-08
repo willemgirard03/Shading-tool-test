@@ -23,15 +23,16 @@
    and is where the few rules tying fields together live. Nothing here touches
    the page.                                                                  */
 
-import { clamp, doyOf, wrap180, wrap360 } from './util.js';
+import { clamp, doyOf, wrap180, wrap360, D2R } from './util.js';
 import { GLAZING0, unitLayout, brokenUnits, buildCell, SLAB0 } from './geometry/cell.js';
-import { DEVICE0, array0, arrayLen0, deviceFromV4, deviceName, lenFromWindow } from './geometry/device.js';
-import { site0, SITE_KINDS, SITE_FIELDS, isStreet } from './geometry/site.js';
+import { DEVICE0, array0, arrayLen0, deviceFromV4, deviceName, lenFromWindow, memberLen, buildDevice, reachBack, HINGE_F, arrayOn, arraySpan } from './geometry/device.js';
+import { arrayAnchor } from './geometry/arrays.js';
+import { site0, SITE_KINDS, SITE_FIELDS, isStreet, siteFrame, CTX_FIELDS } from './geometry/site.js';
 import { lib0, addEntry, duplicateEntry, nextName, entryName, newUnit, newSystem, flatGlazing, layoutGlazing, adoptGlazing, usage, SYSTEM_KEYS, SHGC_MAX } from './library.js';
 import { arrayPositions } from './geometry/arrays.js';
 import { solarPosition } from './solar.js';
 import { pickSunAt } from './sunpick.js';
-import { facadeLength, FACADES, facadeAzimuth, offsetIn, rotIn } from './geometry/building.js';
+import { facadeLength, FACADES, facadeAzimuth, offsetIn, rotIn, storeyRot, contextPlace, contextLocal, contextAxes, contextGap, storeyCentre, CTX_DRAFT0 } from './geometry/building.js';
 
 /* A storey: its height, its floorplate w x d, its rotation rot (clockwise,
    degrees) measured from the building's north offset, the floor below, or
@@ -131,36 +132,67 @@ export function getValue(k, st = S) {
     if (rest === 'unit') { const u = selUnitType(st); return u ? u.id : ''; }
     if (rest === 'shd') return selShadingId(st) || '';
     if (rest === 'offU') { const b = r && r.broken && r.broken[selUnitIndex(st)]; return b ? b.offU || 0 : 0; }
+    if (rest === 'headGap') { const u = selUnitType(st); return u ? ceilingOf(st) - (u.fillH ? ceilingOf(st) : Math.min(u.sill + u.winH, ceilingOf(st))) : undefined; }
+    if (rest === 'sillK' || rest === 'head') {
+      const u = selUnitType(st); if (!u) return undefined;
+      return rest === 'sillK' ? u.sill : u.fillH ? ceilingOf(st) : Math.min(u.sill + u.winH, ceilingOf(st));
+    }
+    if (rest === 'arrN' || rest === 'arrSp') { const lay = r && layoutGlazing(st, r); if (!lay) return undefined; const L = unitLayout(lay, facadeLength(st, st.sel.f, st.sel.st)); return rest === 'arrN' ? L.n : L.pitch; }
     if (SYSTEM_KEYS.includes(rest)) { const y = selSystem(st); return y ? y[rest] : undefined; }
     const u = selUnitType(st); return u ? u[rest] : undefined;
   }
   if (head === 'name') { const o = nameTarget(st, rest); return o ? o.name : undefined; }
+  if (head === 'shgc') return sideShgc(st, rest);
   if (head === 'site') {
     const sg = st.site || site0();
     if (rest === 'edit') return sg.edit || 'S';
+    if (rest === 'ctxFrame') return sg.ctxFrame || 'building';
+    if (rest === 'ctxSel') return sg.ctxSel || '';
+    if (rest === 'ctxFollow') return (sg.ctxFrame || 'building') === 'building';
     const [f, fld] = rest.split('.');
+    // the context building being edited - its distance to the building worked out - and the size the next one is added at
+    if (f === 'k') { const c = selContext(st); return !c ? undefined : fld === 'gap' ? contextGap(st, c).d : c[fld]; }
+    if (f === 'draft') return (sg.draft || CTX_DRAFT0())[fld];
     return sg[f] ? sg[f][fld] : undefined;
   }
+  if (head === 'a' && (rest === 'arrN' || rest === 'arrSp')) { const f = arrayFigures(selDevice(st)); return f ? (rest === 'arrN' ? f.n : f.sp) : undefined; }
   if (head === 'd' && rest === 'type') { const h = selShading(st), r = selCell(st); return h && h.devices.length ? h.devices[clamp(r.dev || 0, 0, h.devices.length - 1)] : ''; }
   if (head === 'd') {
     const D = selDevice(st);
     if (!D) return undefined;
     if (rest === 'lenRel') return lenFromWindow(D);
+    // the member's whole length, however it is given
+    if (rest === 'full') { const o = openingOf(st); return memberLen(D, D.dir === 'h' ? [o.u0, o.u1] : [o.v0, o.v1]); }
+    if (rest === 'offU' || rest === 'offV') return D.offOn ? D[rest] : 0;
+    // the gap between the wall and the member's nearest point, as it stands
+    if (rest === 'clear') return Math.max(D.offset + (HINGE_F[D.hinge] ?? 0) * D.depth, reachBack(D)) - reachBack(D);
+    // how far the turned member stands out from the wall, across its depth and thickness
+    if (rest === 'proj') { const a = D.angle * D2R; return D.depth * Math.abs(Math.cos(a)) + D.thick * Math.abs(Math.sin(a)); }
     // the extension past the window, shown on its own slider
     if (rest === 'lenX') return lenFromWindow(D) && D.lenRel !== undefined ? D.len : 0;
     return D[rest];
   }
-  if (head === 'a') { const D = selDevice(st); return D && D.arr ? D.arr[rest] : undefined; }
+  if (head === 'a') {
+    const D = selDevice(st);
+    if (rest === 'on') return !!(D && D.arr);
+    if (!D || !D.arr) return undefined;
+    // the array's length as laid out, whether it follows the window or is its own
+    if (rest === 'len') return arrayOn(D, openingOf(st)).len;
+    if (rest === 'rel') return !!D.arr.rel && D.arr.along !== 'out';
+    return D.arr[rest];
+  }
   if (head === 'h') return st.storeys[+rest] ? st.storeys[+rest].h : undefined;
   if (k === 'plnW') return selStorey(st).w;
   if (k === 'plnD') return selStorey(st).d;
   if (k === 'sh') return selStorey(st).h;
   if (k === 'slabT') return selStorey(st).slab ?? SLAB0;
+  if (k === 'surfAz') return wrap180(facadeAzimuth(st, st.sel.f, st.sel.st) - 180);
   if (k === 'plnOX') return selStorey(st).ox || 0;
   if (k === 'plnOY') return selStorey(st).oy || 0;
   if (k === 'plnRot') return selStorey(st).rot || 0;
   if (k === 'oxyIn') return selStorey(st).oxyIn || 'own';
   if (k === 'rotRel') return selStorey(st).rotRel || 'building';
+  if (k === 'rotBelow') return (selStorey(st).rotRel || 'building') === 'below';
   if (k === 'matchPlate') return st.matchAbove.plate;
   // the sun by its angles: altitude, and azimuth from due south, east negative
   if (k === 'sunAlt') return solarPosition(st.doy, st.hour, st.timeMode).alt;
@@ -202,6 +234,27 @@ function setOne(k, v, st) {
       if (b) b.shd = id; else r.shd = id;
       r.dev = 0; return;
     }
+    /* The window's sill and head, set on the section. Moving the sill keeps the
+       head where it is and the window grows or shrinks to it; moving the head
+       keeps the sill; a height typed keeps the sill. The glass stays between the
+       floor and the ceiling - the underside of this storey's slab. */
+    if (rest === 'headGap') { setOne('g.head', ceilingOf(st) - v, st); return; }
+    if (rest === 'sillK' || rest === 'head' || rest === 'winH') {
+      const u = selUnitType(st); if (!u) return;
+      const ceil = ceilingOf(st), head = u.fillH ? ceil : Math.min(u.sill + u.winH, ceil);
+      if (rest === 'sillK') { const s = clamp(v, 0, head - 0.2); if (!u.fillH) u.winH = +(head - s).toFixed(4); u.sill = s; }
+      else if (rest === 'head') { if (!u.fillH) u.winH = +(clamp(v, u.sill + 0.2, ceil) - u.sill).toFixed(4); }
+      else u.winH = clamp(v, 0.2, Math.max(0.2, ceil - u.sill));
+      return;
+    }
+    // the window array set on its bracket: a number of windows, or their spacing - the way it is set out follows
+    if (rest === 'arrN' || rest === 'arrSp') {
+      const y = selSystem(st); if (!y) return;
+      const want = rest === 'arrN' ? 'number' : 'spacing';
+      if (y.winBy !== want) setOne('g.winBy', want, st);
+      if (rest === 'arrN') y.winN = clamp(Math.round(v), 1, 200); else y.winSp = clamp(v, 0.3, 60);
+      return;
+    }
     // a broken window moved along its bay takes the section cut with it
     if (rest === 'offU') { const b = r.broken && r.broken[i]; if (b) b.offU = v; st.cutU = v; return; }
     if (SYSTEM_KEYS.includes(rest)) {
@@ -220,16 +273,40 @@ function setOne(k, v, st) {
     return;
   }
   if (head === 'name') { const o = nameTarget(st, rest); if (o) { o.name = v; o.auto = false; } return; }
+  if (head === 'shgc') { if (FACADES[rest] !== undefined) { st.shgc = st.shgc || {}; st.shgc[rest] = clamp(v, 0.05, SHGC_MAX); } return; }
   // the site: which side is being set, and each side's condition, setback, street width and curb
   if (head === 'site') {
-    if (!st.site) st.site = site0();
-    const sg = st.site;
+    const sg = siteOf(st);
     if (rest === 'edit') { if (FACADES[v] !== undefined) sg.edit = v; return; }
+    if (rest === 'ctxFrame') { contextFrame(st, v); return; }
+    if (rest === 'ctxSel') { sg.ctxSel = sg.ctx.some(c => c.id === v) ? v : null; return; }
+    if (rest === 'ctxFollow') { contextFrame(st, v ? 'building' : 'world'); return; }
     const [f, fld] = rest.split('.');
+    if (f === 'k' && fld === 'gap') { const c = selContext(st); if (c) contextToGap(st, c, Math.max(0, v)); return; }
+    if (f === 'k' && (fld === 'w' || fld === 'd' || fld === 'h' || fld === 'a')) {
+      const c = selContext(st);
+      if (!c) return;
+      if (fld === 'a') { const da = wrap180(v - c.a); for (const m of contextGroup(st, c.id)) if (m === c || c.inheritRot) m.a = wrap180(m.a + da); return; }
+      for (const m of contextGroup(st, c.id)) m[fld] = clamp(v, CTX_FIELDS[fld][0], CTX_FIELDS[fld][1]);
+      return;
+    }
+    if (f === 'k' || f === 'draft') {
+      const o = f === 'k' ? selContext(st) : (sg.draft || (sg.draft = CTX_DRAFT0())), r = CTX_FIELDS[fld];
+      if (o && r) o[fld] = fld === 'a' ? wrap180(v) : clamp(v, r[0], r[1]);
+      return;
+    }
     if (!sg[f]) return;
     if (fld === 'kind') { if (SITE_KINDS[v]) { sg[f].kind = v; if (v === 'lane' && sg[f].width > 12) { sg[f].width = 6; sg[f].curb = 0; } if (v === 'street' && sg[f].width < 10) { sg[f].width = 20; sg[f].curb = 3; } } return; }
     const r = SITE_FIELDS[fld];
     if (r) sg[f][fld] = clamp(v, r[0], fld === 'curb' ? Math.min(r[1], sg[f].width) : r[1]);
+    return;
+  }
+  // a shading array set on its bracket: a number of members, or their spacing - the way it is set out follows
+  if (head === 'a' && (rest === 'arrN' || rest === 'arrSp')) {
+    const D = selDevice(st); if (!D || !D.arr) return;
+    const want = rest === 'arrN' ? 'count' : 'spacing';
+    if (D.arr.mode !== want) switchArrayMode(D, want, st);
+    if (rest === 'arrN') D.arr.count = clamp(Math.round(v), 1, 200); else D.arr.spacing = clamp(v, 0.02, 3);
     return;
   }
   if (head === 'd' && rest === 'type') {
@@ -240,6 +317,17 @@ function setOne(k, v, st) {
   if (head === 'd') {
     const D = selDevice(st); if (!D) return;
     if (rest === 'name') D.auto = false;
+    if (rest === 'offU' || rest === 'offV') { if (!D.offOn) { D.offOn = true; D.offU = 0; D.offV = 0; } D[rest] = v; return; }
+    // the justification turned: the device stays where it is, and holds the new end from now on
+    if (rest === 'justU' || rest === 'justV') { justKeep(st, D, rest.slice(4), v); return; }
+    // aligned to the window: a move, once - the outermost hinge, or the member's end, onto the window's edge or middle
+    if (rest === 'alignU' || rest === 'alignV') { alignTo(st, D, rest.slice(5), v); return; }
+    // the hinge moved along the depth: the member stays, and turns about the new line
+    if (rest === 'hinge') { hingeKeep(D, v); return; }
+    // the gap to the wall typed as it stands: the offset takes the difference
+    if (rest === 'clear') { D.offset = Math.max(0, +(D.offset + Math.max(0, v) - getValue('d.clear', st)).toFixed(6)); return; }
+    // the projection typed: the depth that, turned as it is, stands that far out
+    if (rest === 'proj') { const a = D.angle * D2R; D.depth = Math.max(0.02, +((v - D.thick * Math.abs(Math.sin(a))) / Math.max(0.05, Math.abs(Math.cos(a)))).toFixed(4)); return; }
     // measured from the window or outright: the member keeps its length across the switch
     if (rest === 'lenRel') {
       const o = openingOf(st), dim = D.dir === 'h' ? o.u1 - o.u0 : o.v1 - o.v0, was = lenFromWindow(D);
@@ -249,27 +337,45 @@ function setOne(k, v, st) {
       D.lenRel = !!v; return;
     }
     if (rest === 'lenX') { D.lenRel = true; D.len = v; return; }
+    // a whole length typed or dragged: kept as an extension past the window when the member follows the window
+    if (rest === 'full') {
+      const o = openingOf(st), dim = D.dir === 'h' ? o.u1 - o.u0 : o.v1 - o.v0, L = Math.max(0.05, v);
+      if (lenFromWindow(D)) { D.lenRel = true; D.len = +(L - dim).toFixed(4); } else D.len = L;
+      return;
+    }
     if (rest === 'len') { D.lenRel = false; D.len = v; return; }
     if (rest === 'dir' && v !== D.dir) {
       // turning a member swaps which of its justifications its array rides on,
       // so the array is laid out afresh along the new axis
       D.dir = v;
-      if (D.arr) D.arr.len = arrayLen0(D, openingOf(st), D.arr.along === 'out');
+      if (D.arr) D.arr.len = D.arr.rel && D.arr.along !== 'out' ? 0 : arrayLen0(D, openingOf(st), D.arr.along === 'out');
       if (D.arr && D.arr.along === 'facade' && v === 'v') D.arr.spacing = Math.max(D.arr.spacing, 0.3);
       return;
     }
     D[rest] = v; return;
   }
+  // the array switched on - starting from the window's own length, at the member's default spacing - or off
+  if (head === 'a' && rest === 'on') {
+    const D = selDevice(st); if (!D) return;
+    if (v && !D.arr) D.arr = Object.assign(array0(D, openingOf(st)), { rel: true, len: 0 });
+    if (!v) D.arr = null;
+    return;
+  }
   if (head === 'a') {
     const D = selDevice(st); if (!D || !D.arr) return;
+    const o = openingOf(st), follows = D.arr.rel && D.arr.along !== 'out';
+    // a length dragged or typed is kept as what it runs past the window, while the array follows the window
+    if (rest === 'len') { const L = Math.max(0, v); D.arr.len = follows ? +(L - arraySpan(D, o)).toFixed(6) : L; return; }
+    // following the window, or not: the array keeps the length it has
+    if (rest === 'rel') { const L = arrayOn(D, o).len; D.arr.rel = !!v; D.arr.len = v ? +(L - arraySpan(D, o)).toFixed(6) : L; return; }
     if (rest === 'along' && v !== D.arr.along) {
       D.arr.along = v;
-      D.arr.len = arrayLen0(D, openingOf(st), v === 'out');
+      D.arr.len = D.arr.rel && v !== 'out' ? 0 : arrayLen0(D, openingOf(st), v === 'out');
       // a pitch equal to the blade depth makes a solid plate when run outward
       if (v === 'out' && D.arr.spacing <= D.depth + 1e-6) D.arr.spacing = Math.min(2, Math.max(0.05, D.depth * 1.6));
       return;
     }
-    if (rest === 'mode' && v !== D.arr.mode) { switchArrayMode(D, v); return; }
+    if (rest === 'mode' && v !== D.arr.mode) { switchArrayMode(D, v, st); return; }
     D.arr[rest] = v; return;
   }
   if (head === 'h') { if (st.storeys[+rest]) st.storeys[+rest].h = clamp(v, 2.4, 8); return; }
@@ -289,8 +395,12 @@ function setOne(k, v, st) {
     }
     return;
   }
+  // turning with the floor below, or with the building: a run of floors each turned on the one below twists
+  if (k === 'rotBelow') { setOne('rotRel', v ? 'below' : 'building', st); return; }
   // the building's north offset turns every storey measured from it, and those measured from them
   if (k === 'rot') { st.rot = wrap180(v); return; }
+  // the selected side's surface azimuth typed: the whole building turns by the difference
+  if (k === 'surfAz') { st.rot = wrap180((st.rot || 0) + wrap180(v - getValue('surfAz', st))); return; }
   // the axes the offset is read along: the figures change, the storey stays put
   if (k === 'oxyIn') {
     const i0 = clamp(st.sel.st, 0, st.storeys.length - 1), i1 = st.matchAbove.plate ? st.storeys.length - 1 : i0;
@@ -331,14 +441,52 @@ function setOne(k, v, st) {
    way; a number becomes the pitch it divided the length at. Only an array
    that added a member at its far end to catch a remainder is uneven, and no
    count can repeat that exactly: it keeps its length and spreads out. */
-function switchArrayMode(D, v) {
-  const A = D.arr, just = A.along === 'out' ? 'start' : D.dir === 'h' ? D.justV : D.justU;
-  const p = arrayPositions(A, [0, 0], 1, just), n = p.length;
+/* A device's offset along an axis of the facade, switched on when first used. */
+function addOff(D, ax, dv) {
+  if (!D.offOn) { D.offOn = true; D.offU = 0; D.offV = 0; }
+  D['off' + ax] = +((D['off' + ax] || 0) + dv).toFixed(6);
+}
+/* What a device sets out along an axis: the array along the facade on the
+   axis it runs, the member's own length on the other. */
+function axisRun(st, D, ax) {
+  const o = openingOf(st), span = ax === 'U' ? [o.u0, o.u1] : [o.v0, o.v1], dir = ax === 'U' ? 1 : -1;
+  const arrAx = D.dir === 'h' ? 'V' : 'U';
+  const len = ax === arrAx ? (D.arr && D.arr.along !== 'out' ? Math.max(0, arrayOn(D, o).len) : 0) : memberLen(D, span);
+  return { o, span, dir, len, arrAx };
+}
+function justKeep(st, D, ax, v) {
+  const { span, dir, len } = axisRun(st, D, ax);
+  addOff(D, ax, arrayAnchor(span, dir, len, D['just' + ax]) - arrayAnchor(span, dir, len, v));
+  D['just' + ax] = v;
+}
+function alignTo(st, D, ax, where) {
+  const { o, arrAx } = axisRun(st, D, ax), ai = ax === 'U' ? 0 : 1;
+  const bs = buildDevice(D, { u0: o.u0, u1: o.u1, v0: o.v0, v1: o.v1, reveal: 0 });
+  if (!bs.length) return;
+  // on the array's own axis the members' hinge lines; across it, the member's ends
+  const xs = ax === arrAx ? bs.map(b => b.anchor) : bs.flatMap(b => { const hl = D.dir === 'h' ? b.h[0] : b.h[1]; return [b.c[ai] - hl, b.c[ai] + hl]; });
+  const lo = Math.min(...xs), hi = Math.max(...xs), w0 = ax === 'U' ? o.u0 : o.v0, w1 = ax === 'U' ? o.u1 : o.v1;
+  // left and top are the start of their axes, as the justification words have them
+  const to = where === 'centre' ? (w0 + w1) / 2 - (lo + hi) / 2
+    : (where === 'start') === (ax === 'U') ? w0 - lo : w1 - hi;
+  addOff(D, ax, to);
+}
+function hingeKeep(D, v) {
+  const f0 = HINGE_F[D.hinge] ?? 0, f1 = HINGE_F[v] ?? 0, a = D.angle * D2R, d = D.depth;
+  // the member's middle sits (0.5 - f) of its depth from its hinge, along the turned depth
+  const along = D.dir === 'h' ? -Math.sin(a) : Math.sin(a), ax = D.dir === 'h' ? 'V' : 'U';
+  D.offset = Math.max(0, +(D.offset - d * (f1 - f0) * (1 - Math.cos(a))).toFixed(6));
+  if (Math.abs(a) > 1e-9) addOff(D, ax, -d * (f0 - f1) * along);
+  D.hinge = v;
+}
+function switchArrayMode(D, v, stt = S) {
+  const A = D.arr, o = openingOf(stt), E = arrayOn(D, o), just = A.along === 'out' ? 'start' : D.dir === 'h' ? D.justV : D.justU;
+  const p = arrayPositions(E, [0, 0], 1, just), n = p.length, follows = A.rel && A.along !== 'out';
   if (v === 'count') {
     const st = p.slice(1).map((x, i) => x - p[i]), even = st.every(x => Math.abs(x - st[0]) < 1e-6);
     A.count = n;
-    if (n > 1 && even) A.len = +(st[0] * (n - 1)).toFixed(6);
-  } else if (n > 1 && A.len > 1e-9) A.spacing = +(A.len / (n - 1)).toFixed(6);
+    if (n > 1 && even) { const L = +(st[0] * (n - 1)).toFixed(6); A.len = follows ? +(L - arraySpan(D, o)).toFixed(6) : L; }
+  } else if (n > 1 && E.len > 1e-9) A.spacing = +(E.len / (n - 1)).toFixed(6);
   A.mode = v;
 }
 
@@ -410,7 +558,37 @@ export function windowState(st, id) {
 }
 
 /* ---------- storeys ---------- */
-const STOREY_KEYS = { sh: ['h', 2.4, 8], slabT: ['slab', 0, 2], plnW: ['w', 8, 80], plnD: ['d', 6, 60], plnOX: ['ox', -30, 30], plnOY: ['oy', -30, 30], plnRot: ['rot', -180, 180] };
+const STOREY_KEYS = { sh: ['h', 2.4, 8], slabT: ['slab', 0, 2], plnW: ['w', 4, 200], plnD: ['d', 4, 200], plnOX: ['ox', -200, 200], plnOY: ['oy', -200, 200], plnRot: ['rot', -180, 180] };
+/* The selected storey's floorplate set from the site view: its size, where
+   its middle stands in the world, and its turn from true north. The offset is
+   written along the building's axes from then on, so floors matched above
+   stack over it however each is turned; the turn is written from what the
+   floor turns with (the building, or the floor below). With Match floors
+   above on, the floors above take the same figures - turned on the floor
+   below, a stack of them twists. */
+export function plateTo(st, o) {
+  const i0 = clamp(st.sel.st, 0, st.storeys.length - 1), i1 = st.matchAbove.plate ? st.storeys.length - 1 : i0, p = st.storeys[i0];
+  const set = (f, x) => { const [, lo, hi] = Object.values(STOREY_KEYS).find(s => s[0] === f); for (let i = i0; i <= i1; i++) st.storeys[i][f] = f === 'rot' ? wrap180(x) : clamp(x, lo, hi); };
+  if (o.w !== undefined) set('w', o.w);
+  if (o.d !== undefined) set('d', o.d);
+  if (o.a !== undefined) set('rot', o.a - (storeyRot(st, i0) - (p.rot || 0)));
+  const r = (st.rot || 0) * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
+  const placeAt = (i, C) => { const q = st.storeys[i]; q.oxyIn = 'building'; q.ox = C[0] * c - C[1] * s; q.oy = C[0] * s + C[1] * c; };
+  if (o.C && i0 === 0) {
+    // the ground floor stays centred on the site: what would move it moves the floors above it the
+    // other way - those not matched to it - and the massing that follows the building, so all of
+    // them keep their place against the side that did not move
+    const C0 = storeyCentre(st, 0), sh = [o.C[0] - C0[0], o.C[1] - C0[1]];
+    if (Math.hypot(sh[0], sh[1]) > 1e-12) {
+      for (let i = i1 + 1; i < st.storeys.length; i++) { const Ci = storeyCentre(st, i); placeAt(i, [Ci[0] - sh[0], Ci[1] - sh[1]]); }
+      if (st.site && st.site.ctx && (st.site.ctxFrame || 'building') === 'building')
+        for (const k of st.site.ctx) { const p = contextPlace(st, k), L = contextLocal(st, [p.C[0] - sh[0], p.C[1] - sh[1]]); k.x = L[0]; k.y = L[1]; }
+    }
+  } else if (o.C) {
+    for (let i = i0; i <= i1; i++) placeAt(i, o.C);
+  }
+  return true;
+}
 /** the storeys above take the selected one's height, floorplate, north offset and offset */
 export function matchShapeAbove(st = S) {
   const s0 = selStorey(st);
@@ -700,6 +878,162 @@ export const applyShadingPreset = andAbove(function applyShadingPreset(name, st 
   return true;
 });
 
+/** the underside of the selected storey's slab, above its floor: the highest a window's head can go */
+export function ceilingOf(st = S) { const p = selStorey(st); return p.h - (p.slab ?? SLAB0); }
+/** a shading array's number of members and their spacing, as its bracket reads them */
+export function arrayFigures(D, g = openingOf()) {
+  const A = arrayOn(D, g);
+  if (!A) return null;
+  const just = A.along === 'out' ? 'start' : D.dir === 'h' ? D.justV : D.justU, p = arrayPositions(A, [0, 0], 1, just);
+  // set out by spacing, that is the spacing - the first gap of a centred array can be the remainder
+  return { n: p.length, sp: A.mode === 'count' ? (p.length > 1 ? A.len / (p.length - 1) : A.spacing) : A.spacing };
+}
+
+/* ---------- SHGC, side by side ----------
+   One SHGC for all the glass of a side, on every storey: typed on its facade
+   in the site view. Until it is typed, a side reads what its glass has. */
+export function sideShgc(st, f) {
+  if (st.shgc && st.shgc[f] !== undefined) return st.shgc[f];
+  for (const s of st.storeys) { const g = s.cells[f] && flatGlazing(st, s.cells[f]); if (g) return g.shgc ?? SHGC_MAX; }
+  return SHGC_MAX;
+}
+
+/* ---------- context buildings ----------
+   Added at the size set for the next one, where the site view is clicked (or,
+   with no site view on the page, just south of the site), square to the axes
+   they are read in; then moved, turned and resized by their own controls. */
+/** the site, with every field it has now - a design made before context buildings has none of theirs */
+export function siteOf(st = S) {
+  if (!st.site) st.site = site0();
+  const d = site0();
+  for (const k of ['ctx', 'ctxFrame', 'ctxSel', 'ctxSeq', 'draft', 'grpSeq']) if (st.site[k] === undefined) st.site[k] = d[k] ?? 0;
+  return st.site;
+}
+export const selContext = (st = S) => { const sg = st.site; return sg && sg.ctx ? sg.ctx.find(c => c.id === sg.ctxSel) || null : null; };
+/** a context building added with its centre at a point in the world (or, given none, south of the site); returns its id */
+export function addContextAt(P, st = S) {
+  const sg = siteOf(st), dr = sg.draft || CTX_DRAFT0();
+  if (!P) { const SF = siteFrame(st); P = SF.toW(0, SF.y0 - dr.d / 2 - 12); }
+  const L = contextLocal(st, P), id = 'k' + (++sg.ctxSeq);
+  sg.ctx.push({ id, w: dr.w, d: dr.d, h: dr.h, x: +L[0].toFixed(2), y: +L[1].toFixed(2), a: 0 });
+  sg.ctxSel = id;
+  return id;
+}
+/** a copy of a context building, in the same place, selected - its own, not an instance; returns its id */
+export function duplicateContext(id, st = S) {
+  const sg = siteOf(st), c = sg.ctx.find(x => x.id === id);
+  if (!c) return null;
+  const nid = 'k' + (++sg.ctxSeq), cp = Object.assign({}, c, { id: nid });
+  delete cp.grp; delete cp.inheritRot;
+  sg.ctx.push(cp);
+  sg.ctxSel = nid;
+  return nid;
+}
+
+/* ---------- instances ----------
+   Massings made instances of one another share a group (grp). A face pushed
+   or pulled on one is pushed or pulled on every one - the same face, by the
+   same amount, each in its own axes, so each grows the same way from where it
+   stands; a size typed is typed on all. Where each stands is its own. A turn
+   is its own too, unless the one turned passes its turns on (inheritRot, off
+   at first, set instance by instance): then the others turn by as much, each
+   about its own middle. Made unique, a massing leaves its group; a group of
+   one is no group. */
+export const contextGroup = (st, id) => {
+  const sg = siteOf(st), c = sg.ctx.find(x => x.id === id);
+  return !c ? [] : c.grp ? sg.ctx.filter(x => x.grp === c.grp) : [c];
+};
+/** a massing made an instance of another: the two share the other's group, or a new one */
+export function instanceContext(st, fromId, id) {
+  const sg = siteOf(st), a = sg.ctx.find(x => x.id === fromId), b = sg.ctx.find(x => x.id === id);
+  if (!a || !b || a === b) return false;
+  if (!a.grp) a.grp = 'g' + (++sg.grpSeq);
+  b.grp = a.grp; b.inheritRot = false;
+  for (const k of ['w', 'd', 'h']) b[k] = a[k];
+  return true;
+}
+export function makeUnique(st, id) {
+  const sg = siteOf(st), c = sg.ctx.find(x => x.id === id);
+  if (!c || !c.grp) return false;
+  const g = c.grp;
+  delete c.grp; c.inheritRot = false;
+  const rest = sg.ctx.filter(x => x.grp === g);
+  if (rest.length === 1) { delete rest[0].grp; rest[0].inheritRot = false; }
+  return true;
+}
+/** where every massing of a group stands, as a drag begins: id -> { C, a, w, d, h } in the world */
+export function contextSnaps(st, id) {
+  const out = {};
+  for (const c of contextGroup(st, id)) { const p = contextPlace(st, c); out[c.id] = { C: p.C.slice(), a: p.a, w: c.w, d: c.d, h: c.h }; }
+  return out;
+}
+/** a face of one massing moved to make its size dim, and the same face of every instance, each in its own axes, from where they stood at snaps */
+export function pullContext(st, id, key, dim, snaps) {
+  const k = key === 'top' ? 'h' : key[1] === 'x' ? 'w' : 'd', s0 = snaps[id];
+  if (!s0) return;
+  const dt = dim - s0[k];
+  for (const [mid, s] of Object.entries(snaps)) {
+    let C = s.C;
+    if (k !== 'h') {
+      const r = s.a * D2R, ax = key[1] === 'x' ? [Math.cos(r), -Math.sin(r)] : [Math.sin(r), Math.cos(r)], sg = key[0] === '+' ? 1 : -1;
+      C = [s.C[0] + sg * ax[0] * dt / 2, s.C[1] + sg * ax[1] * dt / 2];
+    }
+    putContext(st, mid, C, s.a, { [k]: s[k] + dt });
+  }
+}
+/** one massing turned to aWorld about its middle, and - if it passes its turns on - every instance by as much, from where they stood at snaps */
+export function turnContext(st, id, aWorld, snaps) {
+  const sg = siteOf(st), c = sg.ctx.find(x => x.id === id), s0 = snaps[id];
+  if (!c || !s0) return;
+  const da = aWorld - s0.a;
+  for (const [mid, s] of Object.entries(snaps)) if (mid === id || c.inheritRot) putContext(st, mid, s.C, s.a + da);
+}
+export function removeContext(id, st = S) {
+  const sg = siteOf(st), n = sg.ctx.length;
+  sg.ctx = sg.ctx.filter(c => c.id !== id);
+  if (sg.ctxSel === id) sg.ctxSel = null;
+  return sg.ctx.length < n;
+}
+/** a context building set from where it stands in the world: its centre, its turn from true north, and its size */
+export function putContext(st, id, C, aWorld, dims) {
+  const sg = siteOf(st), c = sg.ctx.find(x => x.id === id);
+  if (!c) return false;
+  const L = contextLocal(st, C);
+  c.x = L[0]; c.y = L[1]; c.a = wrap180(aWorld - contextAxes(st).a);
+  if (dims) for (const k of ['w', 'd', 'h']) if (dims[k] !== undefined) c[k] = clamp(dims[k], CTX_FIELDS[k][0], CTX_FIELDS[k][1]);
+  return true;
+}
+/* A distance to the building typed for a context building: it is moved
+   straight toward or away from the building - along the line of its nearest
+   approach, or, where it overlaps, from the building's middle - until the
+   nearest point is that far. The nearest point can change as it moves, so the
+   step is taken again until it settles. */
+function contextToGap(st, c, want) {
+  for (let i = 0; i < 6; i++) {
+    const g = contextGap(st, c), p = contextPlace(st, c);
+    if (Math.abs(g.d - want) < 1e-4) return;
+    let dir = g.d > 1e-6 ? [g.a[0] - g.b[0], g.a[1] - g.b[1]] : (C0 => [p.C[0] - C0[0], p.C[1] - C0[1]])(storeyCentre(st, 0));
+    const n = Math.hypot(dir[0], dir[1]) || 1, s = want - g.d;
+    dir = n > 1e-9 ? [dir[0] / n, dir[1] / n] : [0, -1];
+    putContext(st, c.id, [p.C[0] + dir[0] * s, p.C[1] + dir[1] * s], p.a);
+  }
+}
+
+/* Following the building, or locked to true north: switched, every context
+   building keeps where it stands in the world - its figures are re-read in
+   the new axes - and from then on follows (or does not follow) what the
+   building does. */
+export function contextFrame(st, mode) {
+  const sg = siteOf(st), to = mode === 'world' ? 'world' : 'building';
+  if ((sg.ctxFrame || 'building') === to) return;
+  const aTo = contextAxes(st, to).a;
+  for (const c of sg.ctx) {
+    const p = contextPlace(st, c), L = contextLocal(st, p.C, to);
+    c.x = L[0]; c.y = L[1]; c.a = wrap180(p.a - aTo);
+  }
+  sg.ctxFrame = to;
+}
+
 /* ---------- a shading system from an ideal solution ----------
    The ideal members the design recommendations draw - n of them, each 1/n as
    deep at 1/n the spacing - made a shading system type of their own, named,
@@ -812,7 +1146,9 @@ const DEMO_CW = R({ name: 'Tower curtain wall', winBy: 'spacing', winSp: 1.5, wa
 const DEMO_PUNCH = R({ name: 'Tower punched windows', winBy: 'spacing', winSp: 3.0, wallT: 0.30 }, { name: 'Tower window', winW: 1.2, winH: 1.8, sill: 0.75, reveal: 0.10, shgc: 0.33 });
 const PODIUM = { w: 40, d: 24, ox: 0, oy: 0 }, TOWER = { w: 28, d: 16, ox: -4, oy: 3 }, CROWN = { w: 30, d: 20, ox: -3, oy: 1 };
 const DEMO_SITE = { edit: 'S', S: { kind: 'street', off: 0, width: 20, curb: 3 }, E: { kind: 'street', off: 0, width: 8, curb: 2 },
-  N: { kind: 'property', off: 3, width: 6, curb: 0 }, W: { kind: 'lane', off: 1.5, width: 6, curb: 0 } };
+  N: { kind: 'property', off: 3, width: 6, curb: 0 }, W: { kind: 'lane', off: 1.5, width: 6, curb: 0 },
+  // across each street, a building that shades it: a 22 m slab across the narrow street, a low block across the wide one
+  ctx: [{ id: 'k1', w: 16, d: 30, h: 22, x: 38, y: 0, a: 0 }, { id: 'k2', w: 40, d: 14, h: 9, x: 0, y: -41, a: 0 }], ctxSeq: 2, ctxFrame: 'building', ctxSel: null };
 export const TYPOLOGIES = {
   blank: { label: 'Blank block', sub: 'one storey, nothing on it', about: 'A single 3.6 m storey on a 30 × 18 m floorplate, with no glazing: build it up yourself.', plnW: 30, plnD: 18, runs: [[1, 3.6, 0.3, null]], st: 0 },
   officeTower: { label: 'Glazed office tower', sub: 'curtain wall · 20 storeys', about: 'A 36 × 30 m office floorplate, 20 storeys: a 6 m lobby and 4 m office floors in curtain wall on a 1.5 m module, glass to glass, under a 1 m slab band, solar-control glass (SHGC 0.28).', plnW: 36, plnD: 30,
@@ -827,7 +1163,7 @@ export const TYPOLOGIES = {
     runs: [[1, 4.5, 0.5, ALL(STOREFRONT)], [5, 3.0, 0.3, ALL(PUNCHED_APT)]], st: 2 },
   townhouse: { label: 'Townhouse row', sub: 'punched · 3 storeys', about: 'A 36 × 12 m row, 3 storeys of 3 m: 1.5 × 1.8 m windows front and back, blank party-wall ends.', plnW: 36, plnD: 12,
     runs: [[3, 3.0, 0.3, ALL(PUNCHED_TH, ['N', 'S'])]], st: 1 },
-  demo: { label: 'Stress test: mixed site', sub: 'two streets · podium · overhang', about: 'Every condition at once, kept to six storeys: a three-storey podium on a 20 m street (south) and an 8 m street (east), an adjoining property (north) and a lane (west); a tower stepped back above it, its top storey overhanging the one below. The same 900 mm canopy runs over every podium window on both streets - too deep at grade, fine higher up, and the narrow street stricter than the wide one. Curtain wall and punched windows both.',
+  demo: { label: 'Stress test: mixed site', sub: 'two streets · podium · overhang', about: 'Every condition at once, kept to six storeys: a three-storey podium on a 20 m street (south) and an 8 m street (east), an adjoining property (north) and a lane (west); a tower stepped back above it, its top storey overhanging the one below. The same 900 mm canopy runs over every podium window on both streets - too deep at grade, fine higher up, and the narrow street stricter than the wide one. Curtain wall and punched windows both, and a building across each street that shades it.',
     plnW: PODIUM.w, plnD: PODIUM.d, site: DEMO_SITE, st: 1,
     runs: [[1, 4.5, 0.5, [ALL(DEMO_SHOP, ['S', 'E']), ALL(DEMO_SHOP_BARE, ['N', 'W'])], PODIUM],
       [2, 3.2, 0.3, [ALL(DEMO_APT, ['S', 'E']), ALL(DEMO_APT_BARE, ['N', 'W'])], PODIUM],
@@ -858,12 +1194,19 @@ export function applyTypology(key, st = S) {
   };
   for (const [n, h, slab, g, pl] of t.runs) for (let i = 0; i < n; i++) {
     const p = pl || { w: t.plnW, d: t.plnD, ox: 0, oy: 0 };
-    const s = storey0(h, p.w, p.d, p.ox, p.oy, 0, 'own', 'building', slab);
+    const s = storey0(h, p.w, p.d, p.ox, p.oy, 0, 'building', 'building', slab);
     if (g) for (const gg of [].concat(g)) for (const f of gg.sides) s.cells[f] = refOf(gg.recipe);
     st.storeys.push(s);
   }
+  // each side takes the SHGC most of its storeys' glass has
+  st.shgc = {};
+  for (const f of Object.keys(FACADES)) {
+    const n = new Map();
+    for (const s of st.storeys) { const g = s.cells[f] && flatGlazing(st, s.cells[f]); if (g) n.set(g.shgc, (n.get(g.shgc) || 0) + 1); }
+    if (n.size) st.shgc[f] = [...n.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  }
   // a typology that brings its site sets it; the others leave the site as it was
-  if (t.site) st.site = JSON.parse(JSON.stringify(t.site));
+  if (t.site) st.site = Object.assign(site0(), JSON.parse(JSON.stringify(t.site)));
   st.sel = { f: 'S', st: clamp(t.st, 0, st.storeys.length - 1), unit: null };
   st.scope = 'unit'; st.expScope = 'unit';
   const o = selGlazing(st) ? openingOf(st) : null;

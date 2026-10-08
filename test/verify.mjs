@@ -19,7 +19,9 @@ import { existsSync } from 'node:fs';
 import { defaultState, applyCase, setValue, CASES, TYPOLOGIES, applyTypology, glazingFromV4, addStorey, duplicateStorey, removeStorey,
   addGlazing, addDevice, createArray, applyShadingPreset, copyCondition, createHistory, storey0, moveStorey,
   breakUnit, rebindUnit, rebindAll, selGlazing, arrayGlazing, isBroken, selDevice, selCell, duplicateHere, newSystemHere, newUnitHere, useSystem, removeGlazing,
-  saveWindow, openWindow, selectionChanged, keepCuts, windowState, shadingFromIdeal } from '../src/state.js';
+  saveWindow, openWindow, selectionChanged, keepCuts, windowState, shadingFromIdeal, selSystem, addContextAt, removeContext, siteOf, duplicateContext,
+  instanceContext, makeUnique, contextSnaps, pullContext, turnContext, putContext, plateTo } from '../src/state.js';
+import { contextPlace, contextBoxes } from '../src/geometry/building.js';
 import { flatGlazing, usage } from '../src/library.js';
 import { siteChecks, siteFrame, insideBy } from '../src/geometry/site.js';
 /** a side's glazing read back through the library */
@@ -190,10 +192,10 @@ section('2. Closed form');
     const b = buildDevice(D, g)[0], f = { start: 0, centre: 0.5, end: 1 }[hinge];
     const eD = dir === 'h' ? b.e2 : b.e1, hDep = dir === 'h' ? b.h[1] : b.h[0];
     const pivot = b.c.map((x, i) => x - (0.5 - f) * 2 * hDep * eD[i]);
-    const want = dir === 'h' ? [0, 3.3, 0.7] : [-1.5, 2.1, 0.7];
+    const want = dir === 'h' ? [0, 3.3, 0.7 + f * 0.5] : [-1.5, 2.1, 0.7 + f * 0.5];
     hw = Math.max(hw, ...pivot.map((x, i) => i === (dir === 'h' ? 0 : 1) ? 0 : Math.abs(x - want[i])));
   }
-  check('hinge: wall edge, centre and outer edge stay on the set-out point at every angle', hw < 1e-12, 'worst ' + hw.toExponential(1) + ' m');
+  check('hinge: the hinge line stands past the offset by its share of the depth, and stays there at every angle', hw < 1e-12, 'worst ' + hw.toExponential(1) + ' m');
   // a centre-hinged blade at 90 deg stands half above and half below its set-out
   // line, its thickness now lying across the facade
   const bc = buildDevice(Object.assign(DEVICE0('h'), { depth: 0.6, angle: 90, hinge: 'centre', offset: 0.4 }), g)[0];
@@ -204,8 +206,9 @@ section('2. Closed form');
     const D = Object.assign(DEVICE0(dir), { depth: 0.5, thick: 0.04, angle, hinge, offset });
     const b = buildDevice(D, g)[0], lo = Math.min(...boxCorners(b).map(p => p[2]));
     const want = g.reveal + Math.max(0, offset - reachBack(D));      // the face, or the offset past it
-    cw = Math.max(cw, Math.abs(lo - (reachBack(D) > offset ? g.reveal : lo)), lo < g.reveal - 1e-12 ? 1 : 0);
-    if (reachBack(D) > offset) n0++;
+    const wh = offset + { start: 0, centre: 0.5, end: 1 }[hinge] * 0.5;
+    cw = Math.max(cw, Math.abs(lo - (reachBack(D) > wh ? g.reveal : lo)), lo < g.reveal - 1e-12 ? 1 : 0);
+    if (reachBack(D) > wh) n0++;
   }
   check('clearance: no hinge or tilt puts a member into the wall; a buried one just touches it', cw < 1e-12,
     n0 + ' of 60 cases held out, worst ' + cw.toExponential(1) + ' m');
@@ -853,6 +856,170 @@ section('6. The state');
     const iMass = svg.lastIndexOf('var(--shade)'), iRay = svg.indexOf('url(#ar)');
     check('the section draws the storey overhanging the window under the sun ray and the profile angle, not over them',
       (F.m.ctx || []).some(b => b.mass) && iRay > 0 && iMass < iRay, 'overhang at ' + iMass + ', ray at ' + iRay);
+  }
+  // context buildings: one across the street shades the glass; following the building or locked to north
+  {
+    const t = defaultState(); addGlazing(t); t.doy = 355; t.hour = 12; t.timeMode = 'sol';   // the low winter sun, due south
+    const bare = buildFrame(t, null).cur.frac;
+    siteOf(t).draft = { w: 60, d: 10, h: 25 };
+    const id = addContextAt([0, -9 - 20 - 5], t);                 // centred 5 m past a 20 m street in front of the south face
+    const F = buildFrame(t, null), shaded = F.cur.frac, inModel = F.m.ctx.some(b => b.site);
+    // behind the building it cannot shade the south glass, and is left out of the unit's model
+    setValue('site.k.y', 40, t);
+    const behind = buildFrame(t, null).m.ctx.some(b => b.site);
+    setValue('site.k.y', -34, t);
+    // following the building: it turns with it; switched to north, it stays where it stood, then stays put
+    const at = () => contextPlace(t, siteOf(t).ctx[0]).C;
+    const p0 = at(); setValue('rot', 30, t); const p1 = at();
+    setValue('site.ctxFrame', 'world', t); const p2 = at();
+    setValue('rot', -20, t); const p3 = at();
+    setValue('site.ctxFrame', 'building', t); const p4 = at(); setValue('rot', 0, t); const p5 = at();
+    const d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+    const gone = removeContext(id, t) && !contextBoxes(t).length;
+    check('context buildings: one across the street shades the glass, one behind is left out; following the building or locked to north, a switch keeps it in place',
+      bare < 0.5 && shaded > 0.99 && inModel && !behind && d(p0, p1) > 10 && d(p1, p2) < 1e-6 && d(p2, p3) < 1e-6 && d(p3, p4) < 1e-6 && d(p4, p5) > 5 && gone,
+      'south glass at noon, Dec 21: ' + fmt(bare * 100, 0) + '% shaded bare, ' + fmt(shaded * 100, 0) + '% with the block across the street');
+  }
+  // a massing's nearest distance to the building, typed: it moves toward or away until it is that far, however it is turned
+  {
+    const t = defaultState(); addGlazing(t); siteOf(t).draft = { w: 20, d: 10, h: 12 };
+    addContextAt([5, -40], t);
+    setValue('site.k.gap', 15, t); const g1 = getV('site.k.gap', t);
+    setValue('site.k.a', 30, t); setValue('site.k.gap', 8, t); const g2 = getV('site.k.gap', t);
+    setValue('site.k.gap', 0, t); const g3 = getV('site.k.gap', t);
+    const follow = getV('site.ctxFollow', t); setValue('site.ctxFollow', false, t);
+    // a copy stands where the original does, the same size, and is the one selected
+    const orig = t.site.ctxSel, cp = duplicateContext(orig, t), A = t.site.ctx.find(c => c.id === orig), Bc = t.site.ctx.find(c => c.id === cp);
+    check('a massing duplicated: the copy is its own, the same size in the same place, and selected',
+      cp && cp !== orig && t.site.ctxSel === cp && ['w', 'd', 'h', 'x', 'y', 'a'].every(k => Bc[k] === A[k]) && t.site.ctx.length === 2);
+    check('a massing’s distance to the building, typed, moves it there, square or turned; the follow-rotation box switches its axes',
+      Math.abs(g1 - 15) < 1e-3 && Math.abs(g2 - 8) < 1e-3 && g3 < 1e-3 && follow === true && t.site.ctxFrame === 'world',
+      'set 15, 8 turned 30°, 0: got ' + [g1, g2, g3].map(x => fmt(x, 3)).join(', ') + ' m');
+  }
+  // instances: a face pulled on one is pulled on all, each in its own axes; a turn passed on only by an instance that passes turns on
+  {
+    const t = defaultState(); addGlazing(t); siteOf(t).draft = { w: 20, d: 10, h: 12 };
+    const A = addContextAt([0, -60], t), B = duplicateContext(A, t);
+    instanceContext(t, A, B);
+    const at = id => contextPlace(t, t.site.ctx.find(c => c.id === id));
+    putContext(t, B, [40, -60], at(B).a + 90);                    // B moved and turned on its own: A stays
+    const a0 = at(A), b0 = at(B);
+    pullContext(t, A, '+x', 24, contextSnaps(t, A));              // A's +x face out by 4 m
+    const a1 = at(A), b1 = at(B), cA = t.site.ctx.find(c => c.id === A), cB = t.site.ctx.find(c => c.id === B);
+    // each centre moved 2 m along its own x: A's east, B's turned 90° clockwise, so south
+    const pulled = cA.w === 24 && cB.w === 24 && Math.abs(a1.C[0] - a0.C[0] - 2) < 1e-9 && Math.abs(b1.C[1] - b0.C[1] + 2) < 1e-9 && Math.abs(b1.C[0] - b0.C[0]) < 1e-9;
+    turnContext(t, A, a1.a + 30, contextSnaps(t, A));             // A does not pass turns on: B keeps its turn
+    const kept = Math.abs(at(B).a - b1.a) < 1e-9;
+    cA.inheritRot = true;
+    turnContext(t, A, at(A).a + 15, contextSnaps(t, A));          // now it does: B turns 15° too, about its own middle
+    const passed = Math.abs(wrap180(at(B).a - b1.a - 15)) < 1e-9 && Math.hypot(at(B).C[0] - b1.C[0], at(B).C[1] - b1.C[1]) < 1e-9;
+    setValue('site.ctxSel', B, t); setValue('site.k.h', 30, t);   // a size typed on one is typed on all
+    const typed = cA.h === 30 && cB.h === 30;
+    makeUnique(t, B);                                              // B leaves; a group of one is none
+    setValue('site.ctxSel', B, t); setValue('site.k.h', 18, t);
+    const unique = !cA.grp && !cB.grp && cA.h === 30 && cB.h === 18;
+    check('instances: a face pulled on one moves on all, each in its own axes; a turn passed on only when that instance passes turns on; made unique, it goes its own way',
+      pulled && kept && passed && typed && unique, [pulled, kept, passed, typed, unique].join(', '));
+  }
+  // a storey edited in the site view: turned on the floor below with the floors above matched, the tower twists; a side pulled leaves the other where it was
+  {
+    const t = defaultState(); applyTypology('midPunched', t); t.sel.st = 1; t.matchAbove.plate = true;
+    setValue('rotBelow', true, t);
+    plateTo(t, { a: storeyRot(t, 1) + 10, C: storeyCentre(t, 1) });
+    const twist = [1, 2, 3, 4, 5].map(i => storeyRot(t, i));
+    // an upper floor's east side pulled out 4 m: its west side stays, and only that floor changes
+    const u = defaultState(); applyTypology('midPunched', u); u.sel.st = 2; u.matchAbove.plate = false;
+    const a0 = storeyRot(u, 2) * Math.PI / 180, ex = [Math.cos(a0), -Math.sin(a0)], w0 = u.storeys[2].w;
+    const west = i => { const C = storeyCentre(u, i); return [C[0] - ex[0] * u.storeys[i].w / 2, C[1] - ex[1] * u.storeys[i].w / 2]; };
+    const C2 = storeyCentre(u, 2), wb = west(2);
+    plateTo(u, { w: w0 + 4, C: [C2[0] + ex[0] * 2, C2[1] + ex[1] * 2] });
+    const wa = west(2), upper = Math.hypot(wa[0] - wb[0], wa[1] - wb[1]) < 1e-9 && u.storeys[2].w === w0 + 4 && u.storeys[3].w === w0;
+    // the ground floor's east side pulled out 4 m: it stays centred, and the floor above keeps its place against the ground floor's west side
+    u.sel.st = 0;
+    const g0 = storeyCentre(u, 0), rel = () => { const W0 = west(0), W1 = west(1); return [W1[0] - W0[0], W1[1] - W0[1]]; }, r0 = rel();
+    plateTo(u, { w: u.storeys[0].w + 4, C: [g0[0] + ex[0] * 2, g0[1] + ex[1] * 2] });
+    const g1 = storeyCentre(u, 0), r1 = rel(), ground = Math.hypot(g1[0] - g0[0], g1[1] - g0[1]) < 1e-9 && Math.hypot(r1[0] - r0[0], r1[1] - r0[1]) < 1e-9;
+    check('a storey edited in the site view: turned on the floor below with the floors above matched, it twists; a side pulled leaves its other side in place; the ground floor stays centred',
+      twist.every((r, k) => Math.abs(r - 10 * (k + 1)) < 1e-9) && upper && ground,
+      'turns ' + twist.map(r => fmt(r, 0)).join(', ') + '° · upper ' + upper + ' · ground ' + ground);
+  }
+  // the window array typed on its bracket: a number sets it out by number, a spacing by spacing; SHGC side by side
+  {
+    const t = defaultState(); addGlazing(t);
+    setValue('g.arrN', 6, t); const n6 = getV('g.arrN', t), byN = selSystem(t).winBy;
+    setValue('g.arrSp', 2.5, t); const sp = getV('g.arrSp', t), byS = selSystem(t).winBy, nS = getV('g.arrN', t);
+    const before = buildFrame(t, null).m.shgc;
+    setValue('shgc.S', 0.25, t); const south = buildFrame(t, null).m.shgc;
+    setValue('shgc.S', 0.9, t); const capped = getV('shgc.S', t);
+    t.sel.f = 'N'; addGlazing(t); const north = buildFrame(t, null).m.shgc;
+    check('the window array typed on its bracket, by number or by spacing; SHGC set side by side, held to 0.36',
+      n6 === 6 && byN === 'number' && Math.abs(sp - 2.5) < 1e-9 && byS === 'spacing' && nS > 1 && before === 0.36 && south === 0.25 && capped === 0.36 && north === 0.36,
+      '6 windows; at 2.5 m: ' + nS + ' windows; south SHGC ' + south + ', north ' + north);
+  }
+  // the section's sill and head: the sill keeps the head, the head and a typed height keep the sill, all under the ceiling; a shading array set by number or spacing
+  {
+    const t = defaultState(); addGlazing(t);
+    const s0 = getV('g.sillK', t), h0 = getV('g.head', t), ceil = t.storeys[0].h - t.storeys[0].slab;
+    setValue('g.sillK', s0 + 0.3, t); const a = [getV('g.sillK', t), getV('g.head', t)];
+    setValue('g.head', 9, t); const b = [getV('g.sillK', t), getV('g.head', t)];
+    setValue('g.winH', 1.0, t); const c = [getV('g.sillK', t), getV('g.head', t)];
+    setValue('g.sillK', 5, t); const d = [getV('g.sillK', t), getV('g.head', t)];
+    const near = (x, y) => Math.abs(x - y) < 1e-6;
+    const sill = near(a[0], s0 + 0.3) && near(a[1], h0) && near(b[1], ceil) && near(b[0], a[0]) && near(c[0], a[0]) && near(c[1], a[0] + 1.0) && near(d[1], c[1]) && near(d[0], c[1] - 0.2);
+    // the head to the ceiling, typed: the head moves, the sill stays
+    setValue('g.headGap', 0.5, t); const gap = [getV('g.sillK', t), getV('g.head', t), getV('g.headGap', t)];
+    const toCeil = near(gap[0], d[0]) && near(gap[1], ceil - 0.5) && near(gap[2], 0.5);
+    applyShadingPreset('louvres', t);
+    setValue('a.arrN', 4, t); const n4 = getV('a.arrN', t), byN = selDevice(t).arr.mode;
+    setValue('a.arrSp', 0.25, t); const sp = getV('a.arrSp', t), byS = selDevice(t).arr.mode;
+    check('the section’s sill keeps the head, the head and a typed height keep the sill, under the ceiling; a shading array set by number or by spacing on its bracket',
+      sill && toCeil && n4 === 4 && byN === 'count' && near(sp, 0.25) && byS === 'spacing',
+      [n4, byN, sp, byS].join(',') + ' · sill/head ' + [a, b, c, d].map(x => x.map(y => fmt(y, 2)).join('/')).join(' → ') + ' · ceiling ' + fmt(ceil, 2));
+  }
+  // alignment is a move, once: the outermost hinge onto the window's edge, or the middle onto its middle; the justification turned,
+  // the hinge moved - neither moves the device; lengthened, spacing adds members and a number spreads them
+  {
+    const near = (x, y) => Math.abs(x - y) < 1e-6;
+    const t = defaultState(); addGlazing(t); applyShadingPreset('louvres', t);
+    const fr = () => buildFrame(t, null), anchors = () => fr().m.own.map(b => b.anchor), o = fr().m.opening;
+    setValue('d.alignV', 'centre', t); const an = anchors(), mid = near((Math.max(...an) + Math.min(...an)) / 2, (o.v0 + o.v1) / 2);
+    setValue('d.alignV', 'start', t); const top = near(Math.max(...anchors()), o.v1);
+    const before = anchors().join(); setValue('d.justV', 'end', t); const kept = anchors().join() === before && getV('d.justV', t) === 'end';
+    setValue('d.alignU', 'start', t); const b0 = fr().m.own[0], left = near(b0.c[0] - b0.h[0], o.u0);
+    setValue('d.angle', 20, t); const c0 = fr().m.own[0].c.slice(); setValue('d.hinge', 'centre', t); const c1 = fr().m.own[0].c;
+    const still = c0.every((x, i) => near(x, c1[i])) && getV('d.hinge', t) === 'centre';
+    const n0 = getV('a.arrN', t); setValue('a.len', selDevice(t).arr.len + 0.5, t); const more = getV('a.arrN', t) > n0;
+    setValue('a.mode', 'count', t); const n1 = getV('a.arrN', t), sp1 = getV('a.arrSp', t);
+    setValue('a.len', selDevice(t).arr.len + 0.5, t); const wider = getV('a.arrN', t) === n1 && getV('a.arrSp', t) > sp1;
+    check('alignment moves the device once - its middle to the window\u2019s middle, its top hinge to the head, its left end to the jamb; turning the justification or moving the hinge leaves it where it is; lengthened, spacing adds members and a number spreads them',
+      mid && top && kept && left && still && more && wider, [mid, top, kept, left, still, more, wider].join(','));
+  }
+  // an array switched on runs the window's own height, and follows it; fixed, it keeps its length; off, one member is left
+  {
+    const near = (x, y) => Math.abs(x - y) < 1e-6;
+    const t = defaultState(); addGlazing(t); addDevice('h', t);
+    const one = !getV('a.on', t) && buildFrame(t, null).m.own.length === 1;
+    setValue('a.on', true, t); const o = buildFrame(t, null).m.opening, follows = getV('a.rel', t) && near(getV('a.len', t), o.v1 - o.v0);
+    setValue('g.winH', getV('g.winH', t) - 0.4, t); const o2 = buildFrame(t, null).m.opening, still = near(getV('a.len', t), o2.v1 - o2.v0);
+    setValue('a.rel', false, t); const L = getV('a.len', t); setValue('g.winH', getV('g.winH', t) + 0.3, t); const fixed = near(getV('a.len', t), L);
+    setValue('a.on', false, t); const off = !getV('a.on', t) && buildFrame(t, null).m.own.length === 1;
+    check('a new member is one member; its array switched on runs the window\u2019s height and follows it, fixed it keeps its length, off it is one member again',
+      one && follows && still && fixed && off, [one, follows, still, fixed, off].join(','));
+  }
+  // a surface azimuth typed for the selected side turns the whole building by the difference
+  {
+    const t = defaultState(); t.sel.f = 'E'; setValue('surfAz', -75, t); const e = getV('surfAz', t), rot = t.rot;
+    t.sel.f = 'S'; const s = getV('surfAz', t);
+    check('a surface azimuth typed for the selected side turns the whole building to give it that bearing', Math.abs(e + 75) < 1e-9 && Math.abs(rot - 15) < 1e-9 && Math.abs(s - 15) < 1e-9,
+      'east ' + fmt(e, 1) + '° · rotation ' + fmt(rot, 1) + '° · south ' + fmt(s, 1) + '°');
+  }
+  // a member's whole length typed keeps it following the window
+  {
+    const near = (x, y) => Math.abs(x - y) < 1e-9;
+    const t = defaultState(); addGlazing(t); applyShadingPreset('louvres', t);
+    const o = selDevice(t), w0 = getV('d.full', t); setValue('d.full', w0 + 0.4, t);
+    check('a member\u2019s whole length typed keeps it following the window', near(getV('d.full', t), w0 + 0.4) && o.lenRel === true,
+      'length ' + fmt(w0, 2) + ' → ' + fmt(getV('d.full', t), 2));
   }
   // the name given to a new entry is kept as it is, a number it ends in and all
   {

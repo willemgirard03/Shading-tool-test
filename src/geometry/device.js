@@ -3,8 +3,10 @@
    The member is a blade - horizontal, running across the facade - or a fin -
    vertical, running up it. It is placed by justification on the opening it
    shades (left, centre or right; top, centre or bottom), nudged off that point
-   if asked, and stood off the wall face by its offset. It rotates about a
-   hinge line on its own depth: the wall edge, the middle or the outer edge.
+   if asked, and stood off the wall face by its offset - the gap between the
+   wall and its wall edge, laid flat. It rotates about a hinge line on its own
+   depth: the wall edge, the middle or the outer edge; moving the hinge moves
+   the line it turns about, not the member.
    With the usual positive angle - a blade's outer edge dropped, a fin's swung
    right - the wall edge is the blade's top and the fin's left, which is what
    the Top / Left words in the panel mean.
@@ -70,7 +72,17 @@ export const JUST_WORDS = {
   v: { start: 'Top', centre: 'Centre', end: 'Bottom' }
 };
 /** the hinge, in the words of the axis the member's depth swings across */
-export const hingeWords = D => D.dir === 'h' ? JUST_WORDS.v : JUST_WORDS.u;
+export const hingeWords = () => ({ start: 'Inside', centre: 'Centre', end: 'Outside' });
+/** the array as it is laid out on an opening: one that follows the window runs the window's own
+ *  dimension along it and what it runs past it (rel, its len the extension); otherwise its own length */
+export function arrayOn(D, g) {
+  const A = D && D.arr;
+  if (!A || !A.rel || A.along === 'out') return A || null;
+  const span = D.dir === 'h' ? g.v1 - g.v0 : g.u1 - g.u0;
+  return Object.assign({}, A, { len: Math.max(0, span + (A.len || 0)) });
+}
+/** the window's own dimension that an array along the facade follows */
+export const arraySpan = (D, g) => D.dir === 'h' ? g.v1 - g.v0 : g.u1 - g.u0;
 
 export const isLive = D => !!D && D.depth > 0;
 
@@ -88,9 +100,10 @@ export function buildDevice(D, g, free = false) {
   const d = D.depth, t = D.thick, a = D.angle * D2R, ca = Math.cos(a), sa = Math.sin(a);
   const f = HINGE_F[D.hinge] ?? 0, k = (0.5 - f) * d;        // hinge to centre, along the depth
   const offU = D.offOn ? D.offU : 0, offV = D.offOn ? D.offV : 0;
-  const w0 = g.reveal + (free ? D.offset : Math.max(D.offset, reachBack(D)));
+  // the hinge line stands its own distance into the depth past the offset, so the member laid flat keeps its gap to the wall
+  const wh = D.offset + f * d, w0 = g.reveal + (free ? wh : Math.max(wh, reachBack(D)));
   const uSpan = [g.u0, g.u1], vSpan = [g.v0, g.v1];
-  const A = D.arr && D.arr.len > 1e-9 ? D.arr : null;
+  const AA = arrayOn(D, g), A = AA && AA.len > 1e-9 ? AA : null;
   const out = A && A.along === 'out';
   const outs = out ? arrayPositions(A, [w0, w0 + A.len], 1, 'start') : [w0];
 
@@ -129,10 +142,10 @@ export function reachBack(D) {
 
 /** what was held back, and how far a member was held off the wall */
 export function deviceNotes(D, boxes, g, label) {
-  const notes = arrayLimits(D.arr).map(n => label + ': ' + n);
-  const back = reachBack(D);
-  if (boxes.length && back > D.offset + 0.0005)
-    notes.push(label + ' is held ' + Math.round((back - D.offset) * 1000) + ' mm further out than its offset, so that its hinge does not bury it in the wall.');
+  const notes = arrayLimits(arrayOn(D, g)).map(n => label + ': ' + n);
+  const back = reachBack(D), wh = D.offset + (HINGE_F[D.hinge] ?? 0) * D.depth;
+  if (boxes.length && back > wh + 0.0005)
+    notes.push(label + ' is held ' + Math.round((back - wh) * 1000) + ' mm further out than its offset, so that turning it does not bury it in the wall.');
   return notes;
 }
 

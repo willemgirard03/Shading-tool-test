@@ -22,6 +22,7 @@ import { clamp, fmt, v3, wrap180, clipRect } from '../util.js';
 import { boxHi, boxLo, boxSpan } from '../geometry/boxes.js';
 import { GLAZING_TYPES, GLASS_T, wallPieces, wallFaces } from '../geometry/cell.js';
 import { roomOf, roomSurfaces, sunPatches, toUnit, litGlass } from '../geometry/room.js';
+import { glassShadowsOf } from '../geometry/shadows.js';
 import { getRegion } from '../studies.js';
 import { bpoly, bspBuild, bspOrder, paintOrder, BSP_CAP } from '../geometry/bsp.js';
 import { openingFaces, GLASS_GROUP } from './opening.js';
@@ -50,14 +51,15 @@ export function interiorOf(m, S) {
 /** the frame of the drawing: the opening, its devices, and the floor the sun
  *  reaches - as far as a couple of storey heights into the room, so the window
  *  stays the subject; the wheel zooms out to the rest of the storey */
-function extents(m, S) {
+function extents(m, S, whole = true) {
   const b = bayOf(m), bs = m.own, I = interiorOf(m, S), h = m.storeyH;
   const uMax = Math.max(b.u1 - b.u0, 1.5 * h) / 2 + 0.5;
-  const u0 = Math.max(-uMax, I ? Math.min(b.u0, I.region.u0) : b.u0), u1 = Math.min(uMax, I ? Math.max(b.u1, I.region.u1) : b.u1);
+  // the bay alone is framed close: the bay itself, and a little of the room its sun falls into
+  const u0 = whole ? Math.max(-uMax, I ? Math.min(b.u0, I.region.u0) : b.u0) : b.u0, u1 = whole ? Math.min(uMax, I ? Math.max(b.u1, I.region.u1) : b.u1) : b.u1;
   return {
     u0: Math.min(u0, boxLo(bs, 0, u0)), u1: Math.max(u1, boxHi(bs, 0, u1)),
     v0: Math.min(0, boxLo(bs, 1, 0)), v1: Math.max(h, boxHi(bs, 1, 0)),
-    w0: Math.max(-2.2 * h, I ? I.region.w0 : -3), w1: Math.max(0.3, boxHi(bs, 2, 0), m.reveal)
+    w0: Math.max(whole ? -2.2 * h : -1.1 * h, I ? I.region.w0 : -3), w1: Math.max(0.3, boxHi(bs, 2, 0), m.reveal)
   };
 }
 /** how far the cuts may travel: across the opening and what its devices add */
@@ -74,14 +76,15 @@ export function clampCuts(S, m) {
 }
 
 export function detailCamera(m, cam, S) {
-  const x = extents(m, S);
+  const x = extents(m, S, !!cam.whole);
   // the orbit turns about the middle of the window being worked on
   const ctr = m.opening ? [(m.opening.u0 + m.opening.u1) / 2, (m.opening.v0 + m.opening.v1) / 2, 0] : [0, m.storeyH / 2, 0];
   const R = 0.95 * Math.hypot(x.u1 - x.u0, x.v1 - x.v0, x.w1 - x.w0);
   const az = cam.az * Math.PI / 180, el = clamp(cam.el, -80, 85) * Math.PI / 180;
   const e = [Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el)];
   const right = v3.unit(v3.cross([0, 1, 0], e)), up = v3.cross(e, right);
-  const k = 0.47 * Math.min(W, H) / R * cam.zoom;
+  // the bay alone stands larger in its frame: there is nothing round it to show
+  const k = 0.47 * Math.min(W, H) / R * cam.zoom * (cam.whole ? 1 : 1.6);
   const cx = W / 2 + cam.panX, cy = H * 0.5 + cam.panY;
   return {
     x, k, e,
@@ -91,7 +94,7 @@ export function detailCamera(m, cam, S) {
 
 /** the other storeys' elements that stand near the unit - this storey's are drawn whole */
 function inFrame(m, x) {
-  return m.ctx.filter(b => b.st !== m.st && b.c[0] - boxSpan(b, 0) < x.u1 && b.c[0] + boxSpan(b, 0) > x.u0
+  return m.ctx.filter(b => !b.site && b.st !== m.st && b.c[0] - boxSpan(b, 0) < x.u1 && b.c[0] + boxSpan(b, 0) > x.u0
     && b.c[1] - boxSpan(b, 1) < x.v1 + 0.5 && b.c[1] + boxSpan(b, 1) > x.v0 - 0.5);
 }
 
@@ -140,6 +143,41 @@ function partFaces(P) {
    The lit glass, carried along the beam to where each of its corners meets
    the floor or a wall: the edges of the volume of sunlight inside, drawn
    ghosted over everything so the eye can follow it from the glass to the patch. */
+/* The part of the glass the sun reaches past the devices: the lit glass less
+   each device's shadow, as convex pieces - each shadow is convex, so a piece
+   less a shadow is cut into the pieces outside each of its edges in turn. */
+function clipSide(poly, a, b, keepLeft) {
+  const side = p => (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+  const out = [];
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i], q = poly[(i + 1) % poly.length], sp = side(p) * (keepLeft ? 1 : -1), sq = side(q) * (keepLeft ? 1 : -1);
+    if (sp >= 0) out.push(p);
+    if ((sp >= 0) !== (sq >= 0)) { const t = sp / (sp - sq); out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]); }
+  }
+  return out;
+}
+const areaOf = q => Math.abs(q.reduce((s, p, i) => s + p[0] * q[(i + 1) % q.length][1] - q[(i + 1) % q.length][0] * p[1], 0)) / 2;
+function litPieces(m, sl, L) {
+  let pieces = [[[L.u0, L.v0], [L.u1, L.v0], [L.u1, L.v1], [L.u0, L.v1]]];
+  for (const sh0 of glassShadowsOf(m, sl, L)) {
+    // a shadow with no area holds nothing back - and has no inside to cut against
+    const sh = sh0.filter((p, i) => Math.hypot(p[0] - sh0[(i + 1) % sh0.length][0], p[1] - sh0[(i + 1) % sh0.length][1]) > 1e-9);
+    const a2 = sh.reduce((s, p, i) => s + p[0] * sh[(i + 1) % sh.length][1] - sh[(i + 1) % sh.length][0] * p[1], 0);
+    if (sh.length < 3 || Math.abs(a2) < 1e-8) continue;
+    const ccw = a2 > 0, next = [];
+    for (let piece of pieces) {
+      for (let i = 0; i < sh.length && piece.length > 2; i++) {
+        const a = sh[i], b = sh[(i + 1) % sh.length], outside = clipSide(piece, a, b, !ccw);
+        if (outside.length > 2 && areaOf(outside) > 1e-6) next.push(outside);
+        piece = clipSide(piece, a, b, ccw);
+      }
+    }
+    pieces = next;
+    // a glass cut past all reason is drawn whole rather than in a thousand slivers
+    if (!pieces.length || pieces.length > 400) break;
+  }
+  return pieces;
+}
 function beamVolume(m, I, sl) {
   const L = litGlass(m, sl);
   if (!L) return null;
@@ -154,7 +192,10 @@ function beamVolume(m, I, sl) {
   };
   const glass = [[L.u0, L.v0, -GLASS_T], [L.u1, L.v0, -GLASS_T], [L.u1, L.v1, -GLASS_T], [L.u0, L.v1, -GLASS_T]];
   const far = glass.map(hit);
-  return far.some(x => !x) ? null : { glass, far };
+  if (far.some(x => !x)) return null;
+  // the light that gets past the devices, piece by piece, carried to where it lands
+  const lit = litPieces(m, sl, L).map(pc => { const gl = pc.map(([u, v]) => [u, v, -GLASS_T]), fr = gl.map(hit); return fr.some(x => !x) ? null : { glass: gl, far: fr }; }).filter(Boolean);
+  return { glass, far, lit };
 }
 
 /* The trees survive an orbit. The other parts' depend on their geometry
@@ -247,23 +288,31 @@ export function drawDetail(F) {
   // a side standing between the eye and the room is ghosted
   const ghost = q => { const s0 = style(q); return s0 && { fills: s0.fills.map(([f, o]) => [f, o * 0.16]), stroke: s0.stroke ? 'var(--ink3)' : undefined, w: .3 }; };
 
-  // the floor and ceiling of the whole plate, and on the floor the sun through this window
+  /* The window's bay alone, by default: its sun lands on a floor that is not
+     drawn, and nothing else of the storey stands round it. Whole floor: the
+     floor and ceiling of the plate, every side, and the other windows' sun. */
+  const WHOLE = !!V.whole, holeFill = WHOLE ? FLOOR : '#ffffff';
   const pc = plateCorners(F), h = m.storeyH, R = I ? I.R : null;
   const floor = bpoly(pc.map(([u, w]) => [u, 0, w]).reverse(), [0, 1, 0], 'room', { fill: FLOOR });
   const ceil = bpoly(pc.map(([u, w]) => [u, h, w]), [0, -1, 0], 'room', { fill: ROOMWALL });
-  if (floor.n[1] * e[1] > 0) g += paintFaces([floor], P, e, style);
-  else g += paintFaces([ceil], P, e, style);
+  if (WHOLE && floor.n[1] * e[1] > 0) g += paintFaces([floor], P, e, style);
+  else if (WHOLE) g += paintFaces([ceil], P, e, style);
   const items = [];
+  let reaches = '';
   if (m.opening && cur.onFacade && R) for (const pt of sunPatches(m, R, cur.sl)) {
-    if (pt.S.key === 'ceiling') continue;
+    if (pt.S.key === 'ceiling' || (!WHOLE && pt.S.key !== 'floor')) continue;
     const polys = [bpoly(pt.lit.map(p => toUnit(pt.S, p)), pt.S.n, 'patch')]
-      .concat(pt.shade.map(sh => bpoly(sh.map(p => toUnit(pt.S, p)), pt.S.n, 'patchShade', { fill: pt.S.key === 'floor' ? FLOOR : ROOMWALL })));
+      .concat(pt.shade.map(sh => bpoly(sh.map(p => toUnit(pt.S, p)), pt.S.n, 'patchShade', { fill: pt.S.key === 'floor' ? holeFill : ROOMWALL })));
+    // where the whole window's beam would land without its devices, dotted round the patch
+    const reach = POLY(pt.lit.map(p => P(toUnit(pt.S, p))), Object.assign({ fill: 'none' }, { stroke: 'var(--ink3)', w: .8, dash: '2 2.5', op: .9 }, { w: 1 }));
+    // drawn last of all, so the whole window's reach reads through the walls
+    reaches += reach;
     if (pt.S.key === 'floor') { g += paintFaces(polys, P, e, style); continue; }
     // a patch on a wall of the room paints just in front of that wall
     const c = polys[0].pts.reduce((a, p) => [a[0] + p[0], a[1] + p[1], a[2] + p[2]], [0, 0, 0]).map(v => v / polys[0].pts.length);
     items.push({ d: v3.dot(v3.add(c, v3.mul(pt.S.n, 0.4)), e), paint: () => paintFaces(polys, P, e, style) });
   }
-  const lit = m.opening && cur.up ? litParts(F, cur.az.toFixed(3) + ',' + cur.alt.toFixed(3)) : new Map();
+  const lit = WHOLE && m.opening && cur.up ? litParts(F, cur.az.toFixed(3) + ',' + cur.alt.toFixed(3)) : new Map();
   const hits = [];
   // the other windows' patches: on the floor now, on a wall in its place in depth
   for (const L0 of lit.values()) for (const pt of L0.patches) {
@@ -273,7 +322,7 @@ export function drawDetail(F) {
     const c = polys[0].pts.reduce((a, p) => [a[0] + p[0], a[1] + p[1], a[2] + p[2]], [0, 0, 0]).map(v => v / polys[0].pts.length);
     items.push({ d: v3.dot(v3.add(c, v3.mul(n, 0.4)), e), paint: () => paintFaces(polys, P, e, style) });
   }
-  for (const Pt of storeyParts(F)) {
+  for (const Pt of WHOLE ? storeyParts(F) : []) {
     if (Pt.sel) continue;
     const cc = Pt.map([(Pt.rect.u0 + Pt.rect.u1) / 2, h / 2, Pt.rev || 0]);
     const ghosted = Pt.f !== sel.f && v3.dot(Pt.out, e) > 0.05, eL = Pt.eye(e), L0 = lit.get(Pt.f + ':' + Pt.i);
@@ -289,6 +338,22 @@ export function drawDetail(F) {
     const ts = selectedTree(m, cur, x);
     items.push({ d: v3.dot([(m.opening.u0 + m.opening.u1) / 2, h / 2, 0], e), paint: () => paintFaces(walkT(ts, e), P, e, redden(sel.f, sel.st, sel.unit, style)) });
   }
+  /* The sunlight coming in: only the light that gets past the devices is
+     shaded, as one even veil however its pieces overlap - the other windows'
+     fainter - drawn before the walls and the window, so they hide it as they
+     would hide the light itself. */
+  const veil = (b, mp, op) => {
+    let s = '';
+    for (const pc of b.lit) for (let i = 0; i < pc.glass.length; i++) {
+      const j = (i + 1) % pc.glass.length;
+      s += POLY([pc.glass[i], pc.glass[j], pc.far[j], pc.far[i]].map(mp), { fill: 'var(--sun)' });
+    }
+    return s ? `<g opacity="${op}">${s}</g>` : '';
+  };
+  // the volume shaded only when the view asks for it
+  if (V.beam !== false) for (const L0 of lit.values()) if (L0.beam) g += veil(L0.beam, q => P(L0.x.P.map(q)), .05);
+  const beam = m.opening && cur.onFacade && I ? beamVolume(m, I, cur.sl) : null;
+  if (beam && V.beam !== false) g += veil(beam, P, .13);
   items.sort((a, b) => a.d - b.d);
   for (const it of items) g += it.paint();
   detailHits = hits.sort((a, b) => a.d - b.d);
@@ -300,24 +365,9 @@ export function drawDetail(F) {
     return svg(g, 'Three-dimensional view of a blank storey');
   }
 
-  // the volume of sunlight coming in, ghosted over the room: the other windows' fainter
-  if (V.beam !== false) for (const L0 of lit.values()) {
-    const b = L0.beam;
-    if (!b) continue;
-    const mp = q => P(L0.x.P.map(q));
-    for (let i = 0; i < 4; i++) {
-      const j = (i + 1) % 4;
-      g += POLY([b.glass[i], b.glass[j], b.far[j], b.far[i]].map(mp), { fill: 'var(--sun)', op: .05 });
-    }
-  }
-  const beam = cur.onFacade && V.beam !== false ? beamVolume(m, I, cur.sl) : null;
-  if (beam) {
-    for (let i = 0; i < 4; i++) {
-      const j = (i + 1) % 4, q = [beam.glass[i], beam.glass[j], beam.far[j], beam.far[i]].map(P);
-      g += POLY(q, { fill: 'var(--sun)', op: .09 });
-    }
-    for (let i = 0; i < 4; i++) { const a = P(beam.glass[i]), b = P(beam.far[i]); g += L(a[0], a[1], b[0], b[1], { stroke: 'var(--sun)', w: .7, op: .55, dash: '3 2' }); }
-  }
+  // the whole window's beam as if nothing shaded it, dotted in grey - drawn last, so it reads through the walls
+  if (beam) for (let i = 0; i < 4; i++) { const a = P(beam.glass[i]), b = P(beam.far[i]); g += L(a[0], a[1], b[0], b[1], { stroke: 'var(--ink3)', w: .8, dash: '2 2.5', op: .9 }); }
+  g += reaches;
 
   // the two cuts, ghosted, each with a tab to pull it by
   const quad = (pts, o) => POLY(pts.map(P), o);
@@ -325,14 +375,11 @@ export function drawDetail(F) {
     { fill: 'var(--glass)', op: .07, stroke: 'var(--glass)', w: .8, dash: '5 3' });
   g += quad([[x.u0, S.cutV, x.w0], [x.u1, S.cutV, x.w0], [x.u1, S.cutV, x.w1], [x.u0, S.cutV, x.w1]],
     { fill: 'var(--sun)', op: .07, stroke: 'var(--sun)', w: .8, dash: '5 3' });
-  const tab = (pt, col, label, edit) => {
-    const q = P(pt);
-    return CIRCLE(q[0], q[1], 7.5, { fill: 'var(--panel)', stroke: col, 'stroke-width': 1.6 }) + CIRCLE(q[0], q[1], 3, { fill: col })
-      + TB(clamp(q[0], 46, W - 46), clamp(q[1] - 13, 48, H - 26), label, { anchor: 'middle', size: 8.5, fill: col, bg: .9, edit });
-  };
-  // the tabs are pulled to move the cuts; their figures take a typed value
-  g += tab(sectionTab(S, cam), 'var(--glass)', 'section ' + fmt(S.cutU, 2) + ' m', 'cutU');
-  g += tab(planTab(S, cam), 'var(--sun)', 'plan ' + fmt(S.cutV, 2) + ' m', 'cutV');
+  // each plane is dragged from anywhere on it; its figure, typed over, stands at its corner away from the sun
+  const tag = (pt, col, label, edit) => { const q = P(pt); return TB(clamp(q[0], 46, W - 46), clamp(q[1], 48, H - 26), label, { anchor: 'middle', size: 8.5, fill: col, bg: .9, edit }); };
+  const uAway = cur.sl[0] > 0 ? x.u0 : x.u1;
+  g += tag([S.cutU, x.v1, x.w0], 'var(--glass)', 'section ' + fmt(S.cutU * 1000, 0) + ' mm', 'cutU');
+  g += tag([uAway, S.cutV, x.w0], 'var(--sun)', 'plan ' + fmt(S.cutV * 1000, 0) + ' mm', 'cutV');
 
   // one sun ray, from outside through the glass to where it lands inside
   if (cur.onFacade) {
@@ -343,22 +390,14 @@ export function drawDetail(F) {
     g += sunKnob(a[0], a[1]);
     const gf = m.gf;
     detailSun = { knob: a, project: (alt, az) => { const sl = sunLocal(alt, az, gf); return sl[2] > 1e-6 ? P(v3.add(land, v3.mul(sl, Lr))) : null; } };
-    if (cur.sl[1] > 1e-3) {
-      const tf = land[1] / cur.sl[1], fl = v3.sub(land, v3.mul(cur.sl, tf));
-      if (fl[2] > x.w0) { const c = P(fl); g += L(b[0], b[1], c[0], c[1], { stroke: 'var(--sun)', w: 1, dash: '4 3', op: .8 }) + CIRCLE(c[0], c[1], 2.4, { fill: 'var(--sun)' }); }
-    }
   }
 
-  const A = m.winW * m.winH, litArea = (1 - cur.frac) * A;
-  g += T(12, 20, cur.onFacade
-    ? 'orange is where the beam reaches · ' + fmt(litArea, 2) + ' of ' + fmt(A, 2) + ' m² of glass (' + fmt(litArea / A * 100, 0) + ' %)'
-    : cur.up ? 'the sun is up but behind this facade' : 'the sun is below the horizon', { size: 9, fill: 'var(--ink3)' });
-  const side = Math.abs(wrap180(V.detcam.az)) > 90 ? 'from inside' : 'from outside';
-  g += T(12, 32, where + ' · ' + side + (V.detWall ? '' : ' · wall ghosted') + (V.detSolid ? '' : ' · devices see-through'), { size: 9, fill: 'var(--ink3)' });
-  const wallTxt = !m.opening ? 'no glazing' : 'wall ' + fmt(m.wallT * 1000, 0) + ' mm · glass set back ' + fmt(m.reveal * 1000, 0) + ' mm' + (m.run ? ' · glass to glass' : '') + ' · slab ' + fmt((m.slab || 0) * 1000, 0) + ' mm';
-  g += T(12, H - 27, wallTxt + ' · the whole storey, open plan · the sun through ' + PLAN_LIGHT_WORDS[PLAN_LIGHT[S.scope] || 'unit'], { size: 9, fill: 'var(--ink3)' });
-  g += T(12, H - 14, 'drag to orbit · click a window to select it · drag the ray\'s end to move the sun · wheel to zoom', { size: 9, fill: 'var(--ink3)' });
+  g += T(12, 20, where + (!cur.onFacade ? (cur.up ? ' · the sun is behind this facade' : ' · the sun is below the horizon') : ''), { size: 9, fill: 'var(--ink3)' });
   return svg(g, 'Three-dimensional view of one glazing unit in its storey, showing where direct sun lands');
 }
-export const sectionTab = (S, cam) => [S.cutU, cam.x.v1, cam.x.w1];
-export const planTab = (S, cam) => [cam.x.u1, S.cutV, cam.x.w1];
+/** the two cut planes as drawn: each the axis it moves along and its corners */
+export const cutPlanes = (S, cam) => {
+  const x = cam.x;
+  return [{ key: 'cutU', axis: 0, at: [S.cutU, (x.v0 + x.v1) / 2, (x.w0 + x.w1) / 2], pts: [[S.cutU, x.v0, x.w0], [S.cutU, x.v1, x.w0], [S.cutU, x.v1, x.w1], [S.cutU, x.v0, x.w1]] },
+    { key: 'cutV', axis: 1, at: [(x.u0 + x.u1) / 2, S.cutV, (x.w0 + x.w1) / 2], pts: [[x.u0, S.cutV, x.w0], [x.u1, S.cutV, x.w0], [x.u1, S.cutV, x.w1], [x.u0, S.cutV, x.w1]] }];
+};

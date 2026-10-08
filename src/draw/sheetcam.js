@@ -12,7 +12,12 @@ export const SHEETCAM0 = fit => ({ fit, zoom: 1, panX: 0, panY: 0 });
 
 /** box [x0, x1, y0, y1] in drawing axes (x right, y down, metres), the margins
  *  of the sheet, the camera, and the anchor - the point zooming holds still */
-export function sheetCam(box, M, cam, anchor = [0, 0]) {
+export function sheetCam(box, M, cam, anchor = [0, 0], key) {
+  // framed once for a window and kept: a change to the design does not rescale or shift the sheet under the eye
+  if (key !== undefined) { if (!cam.fix || cam.fix.key !== key) cam.fix = { key, box, anchor }; ({ box, anchor } = cam.fix); }
+  // while a grip is dragged the framing holds still, so the drawing does not slide or scale under the pointer;
+  // it is fitted afresh when the grip is let go
+  if (cam.grab) { if (!cam.hold) cam.hold = { box, anchor }; ({ box, anchor } = cam.hold); }
   const [x0, x1, y0, y1] = box, aw = W - M.l - M.r, ah = H - M.t - M.b;
   const k0 = Math.min(aw / Math.max(1e-6, x1 - x0), ah / Math.max(1e-6, y1 - y0));
   const Ax = M.l + aw / 2 + (anchor[0] - (x0 + x1) / 2) * k0, Ay = M.t + ah / 2 + (anchor[1] - (y0 + y1) / 2) * k0;

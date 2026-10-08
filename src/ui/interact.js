@@ -5,15 +5,23 @@
 import { clamp, wrap360, wrap180 } from '../util.js';
 import { solarPosition, sunVec } from '../solar.js';
 import { sunSamples, pickSunAt } from '../sunpick.js';
-import { FACADES, MULTI, facadeAzimuth, buildBuilding, resolveSel, unitModel, blankCell, faceOffset, plateMax } from '../geometry/building.js';
+import { FACADES, MULTI, facadeAzimuth, buildBuilding, resolveSel, unitModel, blankCell, faceOffset, plateMax, contextPlace, storeyCentre, storeyRot } from '../geometry/building.js';
 import { AXCAM0, DETCAM0 } from '../view.js';
-import { setValue } from '../state.js';
+import { setValue, contextSnaps } from '../state.js';
 import { sunGeom, bearing, dayStrip } from '../draw/sunpath.js';
 import { yearGeom } from '../draw/sunyear.js';
-import { detailCamera, cutLimits, sectionTab, planTab } from '../draw/detail.js';
+import { detailCamera, cutLimits, cutPlanes } from '../draw/detail.js';
 import { axonCamera } from '../draw/axon.js';
 import { zoomAt, SHEETCAM0 } from '../draw/sheetcam.js';
 import { setSheet } from '../draw/svg.js';
+
+/* The 3D views' buttons: the left button selects, and drags what it is
+   pressed on - the sun, a handle, a massing; the right button orbits (with
+   Shift, pans - for a trackpad); the middle button pans; the wheel zooms. A
+   left drag on nothing moves nothing. */
+export const camMode = e => e.button === 1 || (e.button === 2 && e.shiftKey) ? 'pan' : e.button === 2 ? 'orbit' : 'click';
+/** the middle button's own scrolling kept off a 3D view, so its drag pans the view instead */
+const noAutoScroll = el => el.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
 
 /** pointer position in the drawing frame of a view, whatever size its sheet is drawn at */
 export function viewPoint(host, e) {
@@ -191,21 +199,17 @@ export function wireView(inst, app) {
       try { det.setPointerCapture(e.pointerId); } catch (_) { } det.classList.add('drag'); e.preventDefault();
       return;
     }
+    // a press on a cut plane: once it moves, it takes the plane the pointer runs along - a press left still is a click
+    let planes = null;
     if (v && !e.shiftKey && e.button === 0) {
       const m = selModel(S);
       if (m.opening) {
         const cam = detailCamera(m, V.detcam, S);
-        const hit = [{ key: 'cutU', axis: 0, at: sectionTab(S, cam) }, { key: 'cutV', axis: 1, at: planTab(S, cam) }]
-          .find(t => { const q = cam.P(t.at); return Math.hypot(q[0] - v[0], q[1] - v[1]) < 14; });
-        if (hit) {
-          H.mark('cut:' + hit.key);
-          drag = { cut: hit.key, from: S[hit.key], pt: v, step: axisStep(cam, hit.at, hit.axis), m };
-          try { det.setPointerCapture(e.pointerId); } catch (_) { } det.classList.add('drag'); e.preventDefault();
-          return;
-        }
+        planes = cutPlanes(S, cam).filter(p => inside(p.pts.map(cam.P), v[0], v[1])).map(p => ({ key: p.key, step: axisStep(cam, p.at, p.axis), m }));
+        if (!planes.length) planes = null;
       }
     }
-    drag = { x: e.clientX, y: e.clientY, pan: e.shiftKey || e.button === 2 || e.button === 1, moved: 0, at: v };
+    drag = { x: e.clientX, y: e.clientY, mode: camMode(e), moved: 0, at: v, planes };
     try { det.setPointerCapture(e.pointerId); } catch (_) { } det.classList.add('drag'); e.preventDefault();
   });
   det.addEventListener('pointermove', e => {
@@ -226,8 +230,18 @@ export function wireView(inst, app) {
     }
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     drag.x = e.clientX; drag.y = e.clientY; drag.moved += Math.abs(dx) + Math.abs(dy);
+    if (drag.mode === 'click' && drag.planes && drag.moved > 3) {
+      // the plane whose own direction on the sheet the pointer follows best
+      const v = viewPoint(det, e); if (!v) return;
+      const mv = [v[0] - drag.at[0], v[1] - drag.at[1]], fit = p => Math.abs(mv[0] * p.step[0] + mv[1] * p.step[1]) / (Math.hypot(p.step[0], p.step[1]) || 1);
+      const p = drag.planes.reduce((a, b) => fit(b) > fit(a) ? b : a);
+      H.mark('cut:' + p.key);
+      drag = { cut: p.key, from: S[p.key], pt: drag.at, step: p.step, m: p.m };
+      return;
+    }
+    if (drag.mode === 'click') return;
     const scale = sheetScale(det);
-    if (drag.pan) { V.detcam.panX += dx * scale; V.detcam.panY += dy * scale; }
+    if (drag.mode === 'pan') { V.detcam.panX += dx * scale; V.detcam.panY += dy * scale; }
     else { V.detcam.az = wrap180(V.detcam.az - dx * 0.35); V.detcam.el = clamp(V.detcam.el + dy * 0.3, -80, 85); }
     app.paint(inst);
   });
@@ -237,7 +251,7 @@ export function wireView(inst, app) {
     try { det.releasePointerCapture(e.pointerId); } catch (_) { }
     if (d.cut || d.sun) { app.schedule(); return; }
     // a click that did not orbit: the window under it, front-most first, is selected
-    if (!d.pan && d.moved < 4 && d.at) {
+    if (d.mode === 'click' && d.moved < 4 && d.at) {
       const hit = (inst.h.hits || []).slice().reverse().find(hh => inside(hh.pts, d.at[0], d.at[1]));
       if (hit) {
         // the eye keeps its direction in the world as the view moves to the new window's frame
@@ -250,6 +264,7 @@ export function wireView(inst, app) {
   det.addEventListener('pointerup', detEnd);
   det.addEventListener('pointercancel', detEnd);
   det.addEventListener('contextmenu', e => e.preventDefault());
+  noAutoScroll(det);
   det.addEventListener('wheel', e => { e.preventDefault(); V.detcam.zoom = clamp(V.detcam.zoom * Math.exp(-e.deltaY * 0.0012), 0.12, 6); app.paint(inst); }, { passive: false });
   return;
   }
@@ -257,7 +272,26 @@ export function wireView(inst, app) {
   /* ---- the section and the plan: the wheel zooms about the pointer, a drag pans ---- */
   if (inst.type === 'section' || inst.type === 'plan') {
     const host = inst.host, isSec = inst.type === 'section', key = isSec ? 'seccam' : 'plancam';
-    let pan = null, sunDrag = null, cutDrag = false;
+    let pan = null, sunDrag = null, cutDrag = false, gripDrag = null, popDown = false, press = null, travel = 0;
+    noAutoScroll(host);
+    host.addEventListener('contextmenu', e => e.preventDefault());
+    /* A grip - the sill, the head, a jamb, the glass's set-back, a device's
+       tip: dragged, its figure follows the pointer's run along the grip's own
+       direction, to the nearest 5 mm. */
+    const GRIP_MIN = { 'g.winW': 0.3, 'd.depth': 0.02, 'g.reveal': 0, 'd.offset': 0, 'g.wallT': 0.1, 'a.len': 0, 'd.full': 0.05, slabT: 0 };
+    // a click on the drawing picks the window's device under it - inside its outline, or within a few pixels of a thin one
+    const segD = (p, a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy || 1, t = clamp(((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2, 0, 1); return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy); };
+    const inPoly = (p, q) => { let c = false; for (let i = 0, j = q.length - 1; i < q.length; j = i++) if ((q[i][1] > p[1]) !== (q[j][1] > p[1]) && p[0] < (q[j][0] - q[i][0]) * (p[1] - q[i][1]) / (q[j][1] - q[i][1]) + q[i][0]) c = !c; return c; };
+    // what the plane cuts comes before what is seen beyond it, and the smaller outline before the larger
+    const area = q => Math.abs(q.reduce((s, p, j) => s + p[0] * q[(j + 1) % q.length][1] - q[(j + 1) % q.length][0] * p[1], 0)) / 2;
+    const devAt = v => {
+      const hs = ((v && inst.h.devHits) || []).filter(h => inPoly(v, h.pts) || h.pts.some((q, j) => segD(v, q, h.pts[(j + 1) % h.pts.length]) < 5));
+      hs.sort((a, b) => (b.cut - a.cut) || area(a.pts) - area(b.pts));
+      return hs.length ? hs[0].i : null;
+    };
+    // a grip under the pointer; a line that drags whole - the site's - only where no grip is
+    const gripAt = v => v && ((inst.h.grips || []).find(g => !g.line && Math.hypot(v[0] - g.p[0], v[1] - g.p[1]) < 8)
+      || (inst.h.grips || []).find(g => g.line && segD(v, g.line[0], g.line[1]) < 5));
     const handle = () => inst.h.handle;
     // the other drawing's cut, as it crosses this one: the plan carries the section's, the section the plan's
     const onCut = v => {
@@ -272,9 +306,24 @@ export function wireView(inst, app) {
       app.paint(inst);
     }, { passive: false });
     host.addEventListener('pointerdown', e => {
-    if (e.target.closest && e.target.closest('[data-edit]')) return;
-      if (e.button !== 0) return;
+    if (e.target.closest && e.target.closest('[data-edit], [data-set]')) return;
       const v = viewPoint(host, e); if (!v) return;
+      travel = 0;
+      // the middle or the right button pans - the sheet has nothing to orbit
+      if (e.button === 1 || e.button === 2) {
+        pan = { v, x: V[key].panX, y: V[key].panY };
+        try { host.setPointerCapture(e.pointerId); } catch (_) { }
+        host.classList.add('drag'); e.preventDefault(); return;
+      }
+      if (e.button !== 0) return;
+      const gp = gripAt(v);
+      if (gp && gp.pop) { popDown = true; e.preventDefault(); return; }
+      if (gp) {
+        app.stopPlay(); H.mark('grip:' + (gp.key || gp.axes.map(a => a.key).join('+')));
+        gripDrag = { g: gp, v0: v, t0: gp.rot ? Math.atan2(v[1] - gp.pivot[1], v[0] - gp.pivot[0]) : 0 }; V[key].grab = true;
+        try { host.setPointerCapture(e.pointerId); } catch (_) { }
+        host.classList.add('drag'); e.preventDefault(); return;
+      }
       // the sun handle: the section holds the azimuth and turns the altitude,
       // the plan holds the altitude and turns the azimuth
       const hd = handle();
@@ -290,11 +339,29 @@ export function wireView(inst, app) {
         try { host.setPointerCapture(e.pointerId); } catch (_) { }
         e.preventDefault(); return;
       }
-      pan = { v, x: V[key].panX, y: V[key].panY };
-      try { host.setPointerCapture(e.pointerId); } catch (_) { }
-      host.classList.add('drag');
+      // a press on the drawing itself: let go where it was pressed, it picks the device there, or lets the picked one go
+      press = { v };
     });
     host.addEventListener('pointermove', e => {
+      if (gripDrag) {
+        const v = viewPoint(host, e); if (!v) return;
+        const { g, v0 } = gripDrag;
+        travel = Math.max(travel, Math.hypot(v[0] - v0[0], v[1] - v0[1]));
+        // an arrow or the turning arc clicked rather than dragged asks how far instead
+        if ((g.arrow || g.rot) && travel < 3) return;
+        // the knob swings the member about its hinge, a degree at a time
+        if (g.rot) {
+          const t = Math.atan2(v[1] - g.pivot[1], v[0] - g.pivot[0]), d = ((t - gripDrag.t0) * 180 / Math.PI + 540) % 360 - 180;
+          setValue('d.angle', clamp(Math.round(g.from + g.sgn * d), -85, 85), S);
+          app.scheduleLight(); return;
+        }
+        for (const ax of g.axes || [g]) {
+          const d2 = ax.dir[0] * ax.dir[0] + ax.dir[1] * ax.dir[1] || 1, t = ((v[0] - v0[0]) * ax.dir[0] + (v[1] - v0[1]) * ax.dir[1]) / d2;
+          setValue(ax.key, Math.max(GRIP_MIN[ax.key] ?? -1e9, Math.round((ax.from + t * (ax.mul || 1)) / 0.005) * 0.005), S);
+        }
+        app.scheduleLight();
+        return;
+      }
       if (sunDrag) {
         const v = viewPoint(host, e); if (!v) return;
         const dx = v[0] - sunDrag.pivot[0], dy = v[1] - sunDrag.pivot[1], D = sunDrag;
@@ -316,18 +383,31 @@ export function wireView(inst, app) {
         if (isSec) S.cutV = inst.h.cut.toV(v[1]); else S.cutU = inst.h.cut.toU(v[0]);
         app.scheduleLight(); return;
       }
+      if (press) { const v = viewPoint(host, e); if (v) travel = Math.max(travel, Math.hypot(v[0] - press.v[0], v[1] - press.v[1])); return; }
       if (!pan) {
         const v = viewPoint(host, e);
-        host.style.cursor = onCut(v) ? (isSec ? 'ns-resize' : 'ew-resize') : '';
+        const gp = gripAt(v);
+        host.style.cursor = gp ? (gp.pop ? 'pointer' : gp.rot ? 'grab' : Math.abs(gp.dir[0]) > Math.abs(gp.dir[1]) ? 'ew-resize' : 'ns-resize')
+          : onCut(v) ? (isSec ? 'ns-resize' : 'ew-resize') : devAt(v) !== null ? 'pointer' : '';
         return;
       }
       const v = viewPoint(host, e); if (!v) return;
+      travel = Math.max(travel, Math.hypot(v[0] - pan.v[0], v[1] - pan.v[1]));
       V[key].panX = pan.x + v[0] - pan.v[0]; V[key].panY = pan.y + v[1] - pan.v[1];
       app.paint(inst);
     });
-    const end = () => {
-      const moved = !!(sunDrag || cutDrag);
-      pan = null; sunDrag = null; cutDrag = false; host.classList.remove('drag'); H.release && H.release();
+    const end = e => {
+      const moved = !!(sunDrag || cutDrag || gripDrag), click = travel < 3 && e.type === 'pointerup';
+      const g = gripDrag && gripDrag.g, wasPress = !!press, wasPop = popDown;
+      pan = null; sunDrag = null; cutDrag = false; gripDrag = null; popDown = false; press = null; host.classList.remove('drag'); H.release && H.release();
+      // the gumball's centre opens the device's settings; an arrow clicked asks how far; a click elsewhere picks a device, or lets it go
+      if (wasPop && click) app.togglePop(inst);
+      else if (g && (g.arrow || g.rot) && click) app.nudge(g, e.clientX, e.clientY);
+      // a line pressed and let go where it was is a click on what lies under it
+      else if (g && g.line && click) app.pick(devAt(viewPoint(host, e)), inst);
+      else if (wasPress && click) app.pick(devAt(viewPoint(host, e)), inst);
+      if (V[key].grab) { V[key].grab = false; V[key].hold = null; if (!moved) app.paint(inst); }
+      if (g && g.key === 'a.len') app.endArray();
       if (moved) app.schedule();                // the day's and year's figures settle once it is let go
     };
     host.addEventListener('pointerup', end); host.addEventListener('pointercancel', end);
@@ -340,7 +420,10 @@ export function wireView(inst, app) {
   const ax = inst.host, menu = inst.el.querySelector('.axLayers');
   menu.addEventListener('change', e => {
     if (e.target.classList.contains('angAt')) { V.angAt = e.target.value; app.paint(inst); return; }
-    if (!e.target.dataset.ax) return; V.layers[e.target.dataset.ax] = e.target.checked; app.paint(inst);
+    const d = e.target.dataset;
+    if (d.axg) { V.groups[d.axg] = e.target.checked; e.target.closest('.laygrp').classList.toggle('off', !e.target.checked); app.paint(inst); return; }
+    if (d.axl) { V.labels[d.axl] = e.target.checked; app.paint(inst); return; }
+    if (!d.ax) return; V.layers[d.ax] = e.target.checked; app.paint(inst);
   });
   inst.el.querySelector('.axReset').addEventListener('click', () => {
     Object.assign(V.axcam, AXCAM0, { daz: wrap360(facadeAzimuth(S, S.sel.f) + 40), focus: null });   // three-quarter view of the side studied
@@ -369,13 +452,122 @@ export function wireView(inst, app) {
     const rot = wrap180(Math.round((S.rot || 0) + wrap180(brg - facadeAzimuth(S, S.sel.f))));
     if (rot !== (S.rot || 0)) { setValue('rot', rot, S); app.scheduleLight(); }
   };
-  ax.addEventListener('pointermove', e => { if (!ad) ax.classList.toggle('rot', onHandle(viewPoint(ax, e))); });
+  /* placing a context building: its ghost follows the pointer on the ground, and a click puts it there */
+  const groundAt = e => { const v = viewPoint(ax, e); return v ? axonCamera(S, V.axcam).ground(v[0], v[1]) : null; };
+  /* Context massing, once placed: its body dragged moves it on the ground; the
+     selected one's face handles push or pull that face alone, the opposite
+     face staying put; its ring turns it about its middle (Shift: by 15°).
+     Alt-dragged, its body leaves a copy where it was and the drag carries the
+     other; let go, the page asks whether that is a copy or an instance. A
+     face pulled or a turn given goes to its instances too, as they inherit it.
+     Right-clicked, a massing opens its instance menu. A
+     massing in front of the block is taken before the block; one behind it,
+     only where it shows. A window under the pointer comes first, unless the
+     massing over it is the one selected. */
+  const ctxRec = id => ((S.site && S.site.ctx) || []).find(c => c.id === id);
+  const snap = c => { const p = contextPlace(S, c); return { C: p.C.slice(), a: p.a, w: c.w, d: c.d, h: c.h }; };
+  const nearPt = (v, p, r) => Math.hypot(p[0] - v[0], p[1] - v[1]) < r;
+  const ctxAt = v => {
+    const ed = inst.h.ctxEdit;
+    if (ed && ctxRec(ed.id)) {
+      if (nearPt(v, ed.rot.p, 10)) return { kind: 'rot', id: ed.id };
+      const f = ed.faces.find(f => nearPt(v, f.p, 8));
+      if (f) return { kind: 'face', id: ed.id, f };
+    }
+    const hits = (inst.h.hits || []).filter(h => inside(h.pts, v[0], v[1])), glass = hits.some(h => h.unit !== null);
+    const sel = S.site && S.site.ctxSel;
+    const hit = (inst.h.ctxHits || []).filter(h => inside(h.pts, v[0], v[1]) && (h.id === sel || (h.front ? !glass : !hits.length)))
+      .sort((a, b) => (b.id === sel) - (a.id === sel) || b.front - a.front)[0];
+    return hit && ctxRec(hit.id) ? { kind: 'move', id: hit.id } : null;
+  };
+  const ctxGrab = (v, e) => {
+    const at = ctxAt(v);
+    if (!at) return null;
+    app.stopPlay();
+    // Alt on the body: the copy is made when the drag first moves, so an Alt-click alone makes none
+    const alt = at.kind === 'move' && e.altKey;
+    if (at.kind === 'move' && !alt && S.site.ctxSel !== at.id) app.selectContext(at.id);
+    const d = { ctx: at.kind, id: at.id, s0: snap(ctxRec(at.id)), snaps: contextSnaps(S, at.id), f: at.f, v0: v, G0: groundAt(e), moved: false, alt };
+    if (at.kind === 'rot') d.C = d.s0.C;
+    return d;
+  };
+  const ctxDrag = (d, e) => {
+    const s = d.s0;
+    // the drag is one step of the history, taken when it first moves - a click that only selects takes none
+    if (!d.moved) {
+      d.moved = true; H.mark('ctx:' + d.ctx + (d.alt ? ':copy' : ''));
+      if (d.alt) { const nid = app.duplicateContext(d.id); if (nid) { d.dupFrom = d.id; d.id = nid; } }
+    }
+    if (d.ctx === 'move' || d.ctx === 'rot') {
+      const G = groundAt(e);
+      if (!G || !d.G0) return;
+      if (d.ctx === 'move') { app.putContext(d.id, [s.C[0] + G[0] - d.G0[0], s.C[1] + G[1] - d.G0[1]], s.a); return; }
+      const brg = p => Math.atan2(p[0] - d.C[0], p[1] - d.C[1]) * 180 / Math.PI, step = e.shiftKey ? 15 : 1;
+      app.turnContext(d.id, s.a + Math.round(wrap180(brg(G) - brg(d.G0)) / step) * step, d.snaps);
+      return;
+    }
+    // a face: the pointer's run along its normal on the drawing, in metres, to the nearest 100 mm
+    const v = viewPoint(ax, e), f = d.f;
+    if (!v) return;
+    const t = ((v[0] - d.v0[0]) * f.sv[0] + (v[1] - d.v0[1]) * f.sv[1]) / (f.sv[0] * f.sv[0] + f.sv[1] * f.sv[1] || 1);
+    const k = f.key === 'top' ? 'h' : f.key[1] === 'x' ? 'w' : 'd';
+    app.pullContext(d.id, f.key, Math.max(1, Math.round((s[k] + t) * 10) / 10), d.snaps);
+  };
+  /* The selected storey, once its wall has been clicked: dragged anywhere on
+     it, it moves; its side handles push or pull a side; its ring turns it.
+     A click on it that does not move goes on to pick what is under it. */
+  const plateAt = v => {
+    const pe = inst.h.plateEdit;
+    if (!pe || !V.plate.on || pe.st !== S.sel.st) return null;
+    if (nearPt(v, pe.rot.p, 11)) return { kind: 'rot' };
+    const f = pe.faces.find(f => nearPt(v, f.p, 9));
+    if (f) return { kind: 'face', f };
+    return pe.st > 0 && inside(pe.hull, v[0], v[1]) ? { kind: 'move' } : null;
+  };
+  const plateSnap = () => { const i = S.sel.st, p = S.storeys[i]; return { C: storeyCentre(S, i).slice(), a: storeyRot(S, i), w: p.w, d: p.d }; };
+  const plateDrag = (d, e) => {
+    const s = d.s0;
+    if (!d.moved) { d.moved = true; app.stopPlay(); H.mark('plate:' + d.plate); }
+    if (d.plate === 'move' || d.plate === 'rot') {
+      const G = groundAt(e);
+      if (!G || !d.G0) return;
+      if (d.plate === 'move') { app.plateTo({ C: [s.C[0] + G[0] - d.G0[0], s.C[1] + G[1] - d.G0[1]] }); return; }
+      const brg = p => Math.atan2(p[0] - s.C[0], p[1] - s.C[1]) * 180 / Math.PI, step = e.shiftKey ? 15 : 1;
+      app.plateTo({ a: s.a + Math.round(wrap180(brg(G) - brg(d.G0)) / step) * step, C: s.C });
+      return;
+    }
+    const v = viewPoint(ax, e), f = d.f;
+    if (!v) return;
+    const t = ((v[0] - d.v0[0]) * f.sv[0] + (v[1] - d.v0[1]) * f.sv[1]) / (f.sv[0] * f.sv[0] + f.sv[1] * f.sv[1] || 1);
+    const k = f.key[1] === 'x' ? 'w' : 'd', dim = Math.max(4, Math.round((s[k] + t) * 10) / 10), dt = dim - s[k];
+    app.plateTo({ [k]: dim, C: [s.C[0] + f.n[0] * dt / 2, s.C[1] + f.n[1] * dt / 2] });
+  };
+  ax.addEventListener('pointermove', e => {
+    ax.classList.toggle('placing', !!V.place.on);
+    if (V.place.on && !ad) { const p = groundAt(e); if (p) { V.place.P = p; app.paint(inst); } return; }
+    if (ad) return;
+    const v = viewPoint(ax, e), pa = v && plateAt(v), at = !pa && v && ctxAt(v);
+    ax.classList.toggle('rot', !at && !pa && onHandle(v));
+    const k = pa ? pa.kind : at ? at.kind : null;
+    ax.style.cursor = !k ? '' : k === 'move' ? (e.altKey && at ? 'copy' : 'move') : k === 'rot' ? 'grab' : 'ns-resize';
+  });
+  ax.addEventListener('pointerleave', () => { if (V.place.on && V.place.P) { V.place.P = null; app.paint(inst); } });
   document.addEventListener('click', e => { if (menu.isConnected && menu.open && !menu.contains(e.target)) menu.open = false; });
   const domeProject = () => { const cam = axonCamera(S, V.axcam); return (alt, az, vx, vy, vz) => cam.P([vx * cam.Rdome, vy * cam.Rdome, vz * cam.Rdome]); };
   let ad = null;
   ax.addEventListener('pointerdown', e => {
     if (e.target.closest && e.target.closest('[data-edit]')) return;
+    if (V.place.on && e.button === 0) { const p = groundAt(e); if (p) app.placeContext(p); e.preventDefault(); return; }
     const v = viewPoint(ax, e);
+    if (v && e.button === 0 && !e.shiftKey) {
+      const pa = plateAt(v);
+      if (pa) {
+        ad = { plate: pa.kind, f: pa.f, s0: plateSnap(), v0: v, v, G0: groundAt(e), moved: false, mode: 'click' };
+        try { ax.setPointerCapture(e.pointerId); } catch (_) { } ax.classList.add('drag'); e.preventDefault(); return;
+      }
+      const d = ctxGrab(v, e);
+      if (d) { ad = d; try { ax.setPointerCapture(e.pointerId); } catch (_) { } ax.classList.add('drag'); e.preventDefault(); return; }
+    }
     const sp = solarPosition(S.doy, S.hour, S.timeMode);
     if (v && !e.shiftKey && e.button === 0 && onHandle(v)) {
       app.stopPlay(); H.mark('rotate');
@@ -387,36 +579,55 @@ export function wireView(inst, app) {
         ad = { sun: true }; try { ax.setPointerCapture(e.pointerId); } catch (_) { } ax.classList.add('drag'); e.preventDefault(); return;
       }
     }
-    ad = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, v, moved: false,
-      pan: e.shiftKey || e.button === 2 || e.button === 1 };
+    ad = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, v, moved: false, mode: camMode(e) };
     try { ax.setPointerCapture(e.pointerId); } catch (_) { } ax.classList.add('drag'); e.preventDefault();
   });
   ax.addEventListener('pointermove', e => {
     if (!ad) return;
+    if (ad.plate) { plateDrag(ad, e); return; }
+    if (ad.ctx) { ctxDrag(ad, e); return; }
     if (ad.sun) { const v = viewPoint(ax, e); if (v) applySun(pickSun(S, v[0], v[1], domeProject())); return; }
     if (ad.rot) { const v = viewPoint(ax, e); if (v) turnTo(v); return; }
     const dx = e.clientX - ad.x, dy = e.clientY - ad.y;
     ad.x = e.clientX; ad.y = e.clientY;
     if (Math.hypot(e.clientX - ad.x0, e.clientY - ad.y0) > 4) ad.moved = true;
+    if (ad.mode === 'click') return;
     const scale = sheetScale(ax);
-    if (ad.pan) { V.axcam.panX += dx * scale; V.axcam.panY += dy * scale; app.paint(inst); }
+    if (ad.mode === 'pan') { V.axcam.panX += dx * scale; V.axcam.panY += dy * scale; app.paint(inst); }
     else { V.axcam.daz = wrap360(V.axcam.daz + dx * 0.45); V.axcam.el = clamp(V.axcam.el + dy * 0.35, 0, 88); app.paint(inst); }
   });
   const axEnd = e => {
     if (!ad) return;
     const was = ad; ad = null; ax.classList.remove('drag');
     try { ax.releasePointerCapture(e.pointerId); } catch (_) { }
+    // a storey dragged settles; a storey clicked without moving goes on to pick what is under it
+    if (was.plate && was.moved) { app.schedule(); return; }
+    if (was.ctx) {
+      // an Alt-drag let go: a copy, or an instance?
+      if (was.dupFrom) app.askInstance(was.dupFrom, was.id, e.clientX, e.clientY);
+      app.schedule(); return;
+    }
+    // a right-click that did not move, on a massing: its instance menu
+    if (was.mode === 'orbit' && !was.moved && was.v && e.type === 'pointerup') {
+      const at = ctxAt(was.v);
+      if (at) { app.contextMenu(at.id, e.clientX, e.clientY); return; }
+    }
     if (was.sun || was.rot) app.schedule();
     // a click that did not move picks whatever window or storey band lies front-most under it
-    if (!was.sun && !was.rot && !was.moved && !was.pan && was.v && e.type === 'pointerup') {
+    if (!was.sun && !was.rot && !was.moved && was.mode === 'click' && was.v && e.type === 'pointerup') {
       const under = (inst.h.hits || []).filter(h => inside(h.pts, was.v[0], was.v[1]));
       const glass = under.filter(h => h.unit !== null);
+      // a click anywhere but on a massing lets the selected one go
+      if (S.site && S.site.ctxSel) app.selectContext(null);
+      // a window selects it; a storey's wall selects that side and storey, and the storey to edit; nothing lets the storey go
       const hit = glass.length ? glass.reduce((a, b) => b.d > a.d ? b : a) : under[0];
-      if (hit) app.select(hit.f, hit.st, hit.unit);
+      if (hit) app.selectPlate(hit.f, hit.st, hit.unit);
+      else if (V.plate.on) { app.endPlate(); app.schedule(); }
     }
   };
   ax.addEventListener('pointerup', axEnd);
   ax.addEventListener('pointercancel', axEnd);
   ax.addEventListener('contextmenu', e => e.preventDefault());
+  noAutoScroll(ax);
   ax.addEventListener('wheel', e => { e.preventDefault(); V.axcam.zoom = clamp(V.axcam.zoom * Math.exp(-e.deltaY * 0.0012), 1e-3, 1e4); app.paint(inst); }, { passive: false });
 }

@@ -7,8 +7,10 @@
    from the left jamb rightward - and -1 when it runs against it, which is how
    blades are set out, from the head downward.
 
-     just      which end of the opening the array is anchored to; it is the
-               member's own justification on that axis, inherited
+     align     where on the opening the array is anchored: its start, middle
+               or end - unset, the justification's own end
+     just      which end of the array stands on that point, so it runs on
+               from there - the start, the middle or the end of the array
      len       how far the array runs from there; 0 is a single member
      ends      whether a pitch that does not divide evenly gets a last member
                on the far end or simply stops short
@@ -20,18 +22,17 @@ import { clamp } from '../util.js';
 export const ARRAY_MAX = 200;             // a hard ceiling, so a typo cannot build a million boxes
 export const PITCH_MIN = 0.02;
 
-export function arrayAnchor(span, dir, len, just) {
-  const [lo, hi] = span, mid = (lo + hi) / 2;
-  if (just === 'centre') return mid - dir * len / 2;
-  if (just === 'end') return (dir > 0 ? hi : lo) - dir * len;
-  return dir > 0 ? lo : hi;
+export function arrayAnchor(span, dir, len, just, align = just) {
+  const [lo, hi] = span;
+  const P = align === 'centre' ? (lo + hi) / 2 : align === 'end' ? (dir > 0 ? hi : lo) : (dir > 0 ? lo : hi);
+  return P - dir * len * (just === 'centre' ? 0.5 : just === 'end' ? 1 : 0);
 }
 
 /** where the members sit along the axis. `A` is the array, or null for one
  *  member standing at the justification point. */
-export function arrayPositions(A, span, dir, just) {
+export function arrayPositions(A, span, dir, just, align = just) {
   const len = A ? Math.max(0, A.len) : 0;
-  const start = arrayAnchor(span, dir, len, just);
+  const start = arrayAnchor(span, dir, len, just, align);
   const ts = [];
   if (!A || len <= 1e-9) ts.push(0);
   else if (A.mode === 'count') {
@@ -58,9 +59,9 @@ export function arrayPositions(A, span, dir, just) {
 
 /** the run of one member along its own length, as [centre, half-length].
  *  A length of 0 takes the opening's own dimension on that axis. */
-export function memberSpan(len, span, dir, just) {
+export function memberSpan(len, span, dir, just, align = just) {
   const L = len > 0 ? len : span[1] - span[0];
-  const a = arrayAnchor(span, dir, L, just);
+  const a = arrayAnchor(span, dir, L, just, align);
   return [a + dir * L / 2, L / 2];
 }
 

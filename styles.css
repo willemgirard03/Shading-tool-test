@@ -337,6 +337,48 @@ body.gaintucked .gainrow{padding:2px 18px}
 .recn input{width:110px; margin:0}
 .recn output{font-family:var(--mono); min-width:2ch; color:var(--ink)}
 .checksec{border-top:1px solid var(--rule)}
+/* a view's own switches in its bar */
+/* the date and the time, a slider and a figure that can be typed, in the settings bar */
+.barslide{display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--ink2); white-space:nowrap; flex:none}
+.barslide input[type=range]{width:150px; margin:0}
+.barslide .val{min-width:4.2em; font-family:var(--mono); font-size:12px; color:var(--ink); border-bottom:1px dotted var(--rule); cursor:text}
+/* the picked device's settings, off its gumball on a plan or a section */
+.view{position:relative}
+.devpop{position:fixed; z-index:40; display:grid; gap:3px; padding:5px 7px 6px; background:var(--panel); border:1px solid var(--rule); border-radius:5px; box-shadow:0 3px 10px rgba(0,0,0,.13); font-size:10.5px}
+.devpop .seg.mini button{padding:1px 6px; font-size:10.5px; line-height:1.5}
+.devpop .barchk{font-size:10.5px}
+.devpop[hidden]{display:none}
+.devpop .dvhd{display:flex; align-items:center; justify-content:space-between; gap:8px; font-weight:600; color:var(--ink2); cursor:move; user-select:none; margin:-1px -3px 1px 0}
+.devpop .dvbtns{display:inline-flex; gap:2px}
+.devpop .dvbtns button{border:0; background:none; color:var(--ink3); font-size:12px; line-height:1; padding:1px 4px; cursor:pointer; border-radius:3px}
+.devpop .dvbtns button:hover{background:var(--rule2); color:var(--ink)}
+.devpop.min>:not(.dvhd){display:none}
+.devpop .dvgrp{display:flex; align-items:center; justify-content:space-between; gap:8px}
+.devpop .dvlab{color:var(--ink3)}
+.barchk{display:inline-flex; align-items:center; gap:4px; font-size:12px; color:var(--ink2); white-space:nowrap; cursor:pointer}
+.barchk input{margin:0}
+/* the site view's layers, in groups */
+.laygrp{border-top:1px solid var(--rule2); padding:4px 0 2px}
+.laygrp:first-child{border-top:0}
+.layhd{display:flex; justify-content:space-between; align-items:center; gap:10px}
+.laylab{font-size:11px; color:var(--ink3)}
+.layitem{padding-left:18px}
+.laygrp.off .layitem,.laygrp.off .laylab{opacity:.45; pointer-events:none}
+/* the settings a drawing has no handle for, folded away */
+details.more{margin:4px 0 8px; border-top:1px solid var(--rule2)}
+details.more>summary{cursor:pointer; font-size:12px; color:var(--ink2); padding:5px 0; list-style:none}
+details.more>summary::before{content:"+ "; font-family:var(--mono); color:var(--ink3)}
+details.more[open]>summary::before{content:"– "}
+.v3dhost.placing, .v3dhost.placing *{cursor:crosshair !important}
+body.placedrag, body.placedrag *{cursor:copy !important; user-select:none}
+/* a small menu at the pointer: a massing's instance menu, or copy-or-instance */
+.ctxmenu{position:absolute; z-index:95; background:var(--panel); border:1px solid var(--rule); box-shadow:0 6px 18px rgba(0,0,0,.16);
+  padding:6px; display:flex; flex-direction:column; gap:3px; min-width:190px; font-size:12.5px}
+.ctxmenu p{margin:2px 4px 4px; font-size:11px; color:var(--ink3); text-transform:uppercase; letter-spacing:.06em}
+.ctxmenu button{text-align:left; border:1px solid transparent; background:none; padding:5px 8px; font-size:12.5px; color:var(--ink); cursor:pointer; border-radius:2px}
+.ctxmenu button:hover:not(:disabled){border-color:var(--glass); background:var(--glasssoft)}
+.ctxmenu button:disabled{color:var(--ink3); cursor:default}
+.ctxmenu .chk{padding:4px 8px; margin:0}
 /* an ideal solution is not the design: dashed, and tagged */
 .reccard.ideal .recsvg{border-style:dashed; border-color:var(--ink3)}
 .idealtag{display:inline-block; font-family:var(--mono); font-size:10px; font-weight:500; text-transform:uppercase; letter-spacing:.06em;
@@ -499,7 +541,12 @@ body.sizingr, body.sizingr *{cursor:row-resize !important; user-select:none}
 body.railtucked .shell{grid-template-columns:30px minmax(0,1fr)}
 body.railtucked .rail>:not(.railtuck){display:none}
 body.railtucked .railtuck{float:none; margin:6px auto; display:block}
-body.bartucked .calcbar>:not(.tuck):not(.cbtitle):not(.gainrow){display:none}
+body.bartucked .calcbar>:not(.tuck):not(.cbtitle):not(.gainrow):not(.playbtn){display:none}
+/* Play day: the one control everyone looks for, in the settings bar and never tucked away */
+.playbtn{font-family:var(--sans); font-weight:600; font-size:13px; padding:4px 14px; border-radius:16px; border:1px solid var(--sun);
+  background:var(--sun); color:#fff; cursor:pointer; white-space:nowrap; flex:none; box-shadow:0 1px 3px rgba(0,0,0,.15)}
+.playbtn:hover{filter:brightness(1.06)}
+.playbtn.on{background:var(--panel); color:var(--sun)}
 body.bartucked .calcbar{padding:4px 18px}
 
 /* a name or button with an explanation behind it: hover to read */

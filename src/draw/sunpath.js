@@ -26,8 +26,9 @@ import { ALT_MAX, getMask, getEnvelopes, getDaySamples, getDaySpan } from '../st
 import { hourly } from '../weather.js';
 import { W, H, El, T, L, POLY, PATH, RECT, CIRCLE, TB, defsCommon, svg } from './svg.js';
 
-const PATH_DOYS = [355, 21, 52, 80, 111, 141, 172, 202, 233, 264, 294, 325];
-const NOON_LABELS = { 172: '21 Jun', 264: '21 Sep', 355: '21 Dec' };
+// the solstices and the equinox - March's and September's paths all but lie on each other, so one stands for both
+const PATH_DOYS = [355, 80, 172];
+const NOON_LABELS = { 172: '21 Jun', 80: '21 Mar · Sep', 355: '21 Dec' };
 export const bearing = az => wrap180(az - 180);
 
 /** chart geometry: V1's 135 deg either side of south, widened to a full

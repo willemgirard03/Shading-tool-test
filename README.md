@@ -1,4 +1,4 @@
-# Vancouver Solar Shading Explorer — v7
+# Vancouver Solar Shading Explorer — v8
 
 **Use it online:** <https://willemgirard03.github.io/Shading-tool-test/>
 

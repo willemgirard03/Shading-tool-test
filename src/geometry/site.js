@@ -14,11 +14,15 @@
 import { SHGC_MAX } from '../library.js';
 import { D2R } from '../util.js';
 import { boxSpan } from './boxes.js';
-import { storeyRot, storeyCentre, FACADES } from './building.js';
+import { storeyRot, storeyCentre, FACADES, CTX_DRAFT0 } from './building.js';
 
 export const SITE_KINDS = { street: 'Street', lane: 'Lane', property: 'Adjoining property', open: 'Open ground' };
 const seg = (kind, off, width, curb) => ({ kind, off, width, curb });
-export const site0 = () => ({ edit: 'S', N: seg('property', 3, 6, 0), E: seg('property', 3, 6, 0), S: seg('street', 0, 20, 3), W: seg('property', 3, 6, 0) });
+export const site0 = () => ({ edit: 'S', N: seg('property', 3, 6, 0), E: seg('property', 3, 6, 0), S: seg('street', 0, 20, 3), W: seg('property', 3, 6, 0),
+  // the context buildings, the axes they are read in, the one being edited, and the size the next one is added at
+  ctx: [], ctxFrame: 'building', ctxSel: null, ctxSeq: 0, draft: CTX_DRAFT0() });
+/** a context building's fields and their ranges: width, depth and height; centre east and north; turn */
+export const CTX_FIELDS = { w: [1, 300], d: [1, 300], h: [1, 300], x: [-1000, 1000], y: [-1000, 1000], a: [-180, 180] };
 export const SITE_FIELDS = { off: [0, 40], width: [3, 60], curb: [0, 15] };
 export const isStreet = s => s && (s.kind === 'street' || s.kind === 'lane');
 
@@ -38,6 +42,25 @@ export function siteFrame(S) {
 export function insideBy(SF, f, P) {
   const [x, y] = SF.toL(P);
   return f === 'S' ? y - SF.y0 : f === 'N' ? SF.y1 - y : f === 'E' ? SF.x1 - x : x - SF.x0;
+}
+
+/* The selected unit's side of the site, in the unit's own axes - u across
+   from its middle, w out from its glass: the boundary's inside distance is
+   linear there, d0 + du u + dw (w - reveal). wAt(c, u) is where that distance
+   is c - 0 the property line, -curb the curb, -allowed the by-law's reach -
+   and allowedAt(z) what the by-law lets a device reach past the line at a
+   height z above the street. Null where no boundary stands in front. */
+export function siteAcross(F) {
+  const sel = F.sel, row = sel && sel.row, m = F.m;
+  if (!row || sel.unit === null || sel.unit === undefined || !F.checks || !m.opening) return null;
+  const SF = F.checks.SF, q = row.units[sel.unit], fr = row.frame, f = sel.f, sg = SF.seg[f];
+  if (!q || !sg || sg.kind === 'open') return null;
+  const at = (u, w) => insideBy(SF, f, [fr.O[0] + fr.U[0] * (q.cc + u) + fr.W[0] * w, fr.O[1] + fr.U[1] * (q.cc + u) + fr.W[1] * w]);
+  const d0 = at(0, 0), du = at(1, 0) - d0, dw = at(0, 1) - d0;
+  if (dw > -0.05) return null;
+  return { f, sg, d0, du, dw, zb: row.zb, street: isStreet(sg),
+    wAt: (c, u) => m.reveal + (c - d0 - du * u) / dw,
+    allowedAt: z => isStreet(sg) ? Math.min(projectionAt(z, sg.width).mm, Math.max(0, (sg.curb - 0.6) * 1000)) / 1000 : 0 };
 }
 
 /** VBBL 1.8.9.3: the projection allowed into a street at a height above it, in mm */

@@ -1,13 +1,13 @@
 /* A static server for working on the tool: the source is ES modules, which a
    browser will not load from file://. Run:  node serve.mjs   (or npm run serve)
-   then open http://127.0.0.1:8774. The built dist/ file needs no server.    */
+   then open http://127.0.0.1:8775. The built dist/ file needs no server.    */
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const port = +(process.env.PORT || 8774);
+const port = +(process.env.PORT || 8775);
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.wasm': 'application/wasm', '.svg': 'image/svg+xml' };
 

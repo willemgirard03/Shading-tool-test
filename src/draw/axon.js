@@ -18,17 +18,19 @@
 
 import { D2R, clamp, fmt, wrap360, wrap180, v3, MONTHS } from '../util.js';
 import { SITE, solarPosition, sunVec } from '../solar.js';
-import { buildingHeight, unitModel, unitKey, FACADES, plateRadius, plateWorld, storeyCentre, storeyBases, storeyRot, toWorld } from '../geometry/building.js';
+import { buildingHeight, unitModel, unitKey, FACADES, plateRadius, plateWorld, storeyCentre, storeyBases, storeyRot, toWorld, boxCorners, contextAxes, contextGap, CTX_DRAFT0 } from '../geometry/building.js';
 import { boxFaces } from '../geometry/boxes.js';
 import { bpoly, paintOrder, bspBuild, bspOrder, BSP_CAP } from '../geometry/bsp.js';
 import { openingFaces, GLASS_GROUP } from './opening.js';
-import { W, H, El, T, L, POLY, PATH, CIRCLE, TB, defsCommon, svg, paintFaces } from './svg.js';
+import { W, H, El, T, L, POLY, PATH, CIRCLE, TB, defsCommon, svg, paintFaces, mm } from './svg.js';
+import { AX_LAYERS } from '../view.js';
 import { hourly } from '../weather.js';
 import { isStreet } from '../geometry/site.js';
 import { TEMP_BANDS } from './sunpath.js';
 
-const PATH_DOYS = [355, 21, 52, 80, 111, 141, 172, 202, 233, 264, 294, 325];
-const NOON_LABELS = { 172: '21 Jun', 264: '21 Sep', 355: '21 Dec' };
+// the solstices and the equinox - March's and September's paths all but lie on each other, so one stands for both
+const PATH_DOYS = [355, 80, 172];
+const NOON_LABELS = { 172: '21 Jun', 80: '21 Mar · Sep', 355: '21 Dec' };
 const compassPt = (brg, r, z) => [r * Math.sin(brg * D2R), r * Math.cos(brg * D2R), z || 0];
 const ringPts = (r, z, n = 96) => Array.from({ length: n + 1 }, (_, i) => compassPt(i * 360 / n, r, z));
 
@@ -165,7 +167,7 @@ let scene = { key: '', units: [], lines: [] };
 function sceneOf(F, cur) {
   const { S, B } = F;
   const sun = cur.up ? cur.az.toFixed(3) + ',' + cur.alt.toFixed(3) : '-';
-  const key = [S.rot || 0, S.storeys.map(s => [s.w, s.d, s.ox || 0, s.oy || 0, s.rot || 0, s.rotRel || 'building', s.oxyIn || 'own'].join('x')).join(','), sun, ...Object.values(B.facades).flatMap(fc => fc.rows.map(r => r.cell ? r.cell.key + (r.units.some(q => q.broken) ? '#' + r.units.map(q => q.cid).join(',') + '#' + r.units.filter(q => q.broken).map(q => q.cell.key).join('&') : '') : 'x' + r.h))].join('|');
+  const key = [(B.context || []).map(b => [...b.c, b.a, ...b.h].map(x => x.toFixed(3)).join(',')).join(';'), S.rot || 0, S.storeys.map(s => [s.w, s.d, s.ox || 0, s.oy || 0, s.rot || 0, s.rotRel || 'building', s.oxyIn || 'own'].join('x')).join(','), sun, ...Object.values(B.facades).flatMap(fc => fc.rows.map(r => r.cell ? r.cell.key + (r.units.some(q => q.broken) ? '#' + r.units.map(q => q.cid).join(',') + '#' + r.units.filter(q => q.broken).map(q => q.cell.key).join('&') : '') : 'x' + r.h))].join('|');
   if (scene.key === key) return scene;
   const backs = new Map(), fronts = new Map(), units = [];
   // each device thinned on its own, so a sparse array is never swallowed by a dense one
@@ -215,10 +217,15 @@ function siteGround(F, P) {
     const s = sg[f];
     if (!isStreet(s)) continue;
     const b = bands[f](s);
-    g += POLY(b.q.map(p => pt(p[0], p[1])), { fill: '#CFD3D1', op: .55 });
-    if (s.curb > 0.05) { const [a, c] = b.at(s.curb), [a2, c2] = b.at(s.width - s.curb); g += line(a, c, { stroke: 'var(--ink3)', w: .7 }) + line(a2, c2, { stroke: 'var(--ink3)', w: .7 }); }
+    // the walks between the property lines and the curbs, the roadway between the curbs a shade warmer, and its centre line
+    g += POLY(b.q.map(p => pt(p[0], p[1])), { fill: '#EFEBE2' });
+    const [r0, r1] = b.at(s.curb), [r2, r3] = b.at(s.width - s.curb);
+    g += POLY([r0, r1, r3, r2].map(p => pt(p[0], p[1])), { fill: '#E1DACB' });
+    if (s.curb > 0.05) g += line(r0, r1, { stroke: '#9A9384', w: .8 }) + line(r2, r3, { stroke: '#9A9384', w: .8 });
+    const [m0, m1] = b.at(s.width / 2);
+    g += line(m0, m1, { stroke: '#B8AE97', w: .9, dash: '8 6' });
     const m = pt(b.mid[0], b.mid[1]);
-    over += TB(m[0], m[1], s.kind + ' ' + fmt(s.width, 1) + ' m', { anchor: 'middle', size: 8.5, fill: 'var(--ink2)', bg: .85, edit: 'site.' + f + '.width' });
+    over += TB(m[0], m[1], s.kind + ' ' + mm(s.width), { anchor: 'middle', size: 8.5, fill: 'var(--ink2)', bg: .85, edit: 'site.' + f + '.width' });
   }
   const sides = { S: [[x0, y0], [x1, y0]], E: [[x1, y0], [x1, y1]], N: [[x1, y1], [x0, y1]], W: [[x0, y1], [x0, y0]] };
   const look = { street: { stroke: 'var(--ink)', w: 1.4 }, lane: { stroke: 'var(--ink)', w: 1.1, dash: '6 3' }, property: { stroke: '#A23A16', w: 1.1, dash: '9 3 2 3' }, open: { stroke: 'var(--ink3)', w: .7, dash: '2 3' } };
@@ -228,9 +235,145 @@ function siteGround(F, P) {
   for (const f of Object.keys(face)) {
     const a = pt(...face[f]), b = pt(...bnd[f]);
     if (sg[f].off > 0.05) g += L(a[0], a[1], b[0], b[1], { stroke: 'var(--ink2)', w: .7 });
-    over += TB((a[0] + b[0]) / 2, (a[1] + b[1]) / 2 + 3, fmt(sg[f].off, 2) + ' m', { anchor: 'middle', size: 8, fill: 'var(--ink2)', bg: .85, edit: 'site.' + f + '.off' });
+    over += TB((a[0] + b[0]) / 2, (a[1] + b[1]) / 2 + 3, mm(sg[f].off), { anchor: 'middle', size: 8, fill: 'var(--ink2)', bg: .85, edit: 'site.' + f + '.off' });
   }
   return { g, over };
+}
+/* A selected massing, ready to edit in place: a handle in the middle of each
+   face toward the eye, pushed or pulled to move that face alone; a ring on
+   the ground to turn it; its width, depth, height and turn written where they
+   read, each typed over by a click; and its nearest distance to the building
+   dimensioned on the ground, typed over to move it toward or away. */
+function contextEdit(F, b, c, cam, P) {
+  const e = cam.e, H2 = 2 * b.h[2], [hw, hd] = b.h;
+  const at = (u, v, z) => [b.c[0] + u * b.ex[0] + v * b.ey[0], b.c[1] + u * b.ex[1] + v * b.ey[1], z];
+  const lab = (q, txt, k, dx = 0, dy = 0) => TB(q[0] + dx, q[1] + dy, txt, { anchor: 'middle', size: 9, fill: 'var(--glass)', bg: .92, edit: k });
+  let g = '';
+  // the footprint, outlined
+  g += POLY([at(-hw, -hd, 0), at(hw, -hd, 0), at(hw, hd, 0), at(-hw, hd, 0)].map(P), { fill: 'none', stroke: 'var(--glass)', w: 1.2, dash: '4 2' });
+  // a handle on every face toward the eye: the screen's run per metre along its normal goes with it, for the drag
+  const faces = [], toward = n => n[0] * e[0] + n[1] * e[1] > 0.05;
+  for (const [key, n, u, v] of [['+x', b.ex, hw, 0], ['-x', [-b.ex[0], -b.ex[1]], -hw, 0], ['+y', b.ey, 0, hd], ['-y', [-b.ey[0], -b.ey[1]], 0, -hd]]) {
+    if (!toward(n)) continue;
+    const Q = at(u, v, b.h[2]), q = P(Q), q1 = P([Q[0] + n[0], Q[1] + n[1], Q[2]]);
+    faces.push({ key, p: q, sv: [q1[0] - q[0], q1[1] - q[1]], n: [n[0], n[1], 0] });
+  }
+  if (e[2] > 0.05) { const Q = at(0, 0, H2), q = P(Q), q1 = P([Q[0], Q[1], Q[2] + 1]); faces.push({ key: 'top', p: q, sv: [q1[0] - q[0], q1[1] - q[1]], n: [0, 0, 1] }); }
+  for (const f of faces) g += POLY([[f.p[0] - 4.5, f.p[1] - 4.5], [f.p[0] + 4.5, f.p[1] - 4.5], [f.p[0] + 4.5, f.p[1] + 4.5], [f.p[0] - 4.5, f.p[1] + 4.5]], { fill: 'var(--panel)', stroke: 'var(--glass)', w: 1.5 });
+  // the ring on the ground, and its knob out past a corner - off the line of every face's handle, and never so near the middle on the drawing that it crowds them
+  const DG = Math.SQRT1_2, pc = P(at(0, 0, 0)), pk = P(at(DG, DG, 0)), perM = Math.max(1e-6, Math.hypot(pk[0] - pc[0], pk[1] - pc[1]));
+  const rr = Math.max(Math.hypot(hw, hd) + Math.max(2, 0.12 * Math.hypot(hw, hd)), 34 / perM), ring = [];
+  for (let k = 0; k <= 48; k++) { const t = k / 48 * 2 * Math.PI; ring.push(P(at(rr * Math.sin(t), rr * Math.cos(t), 0))); }
+  g += PATH(ring.map((q, k) => (k ? 'L' : 'M') + fmt(q[0], 1) + ',' + fmt(q[1], 1)).join(' '), { stroke: 'var(--glass)', w: .8, dash: '2 3', op: .7 });
+  const kx = b.ex[0] * e[0] + b.ex[1] * e[1] >= 0 ? 1 : -1, ky = b.ey[0] * e[0] + b.ey[1] * e[1] >= 0 ? 1 : -1;
+  const kq = P(at(kx * rr * DG, ky * rr * DG, 0));
+  g += CIRCLE(kq[0], kq[1], 6.5, { fill: 'var(--panel)', stroke: 'var(--glass)', 'stroke-width': 1.6 }) + T(kq[0], kq[1] + 3.5, '↻', { anchor: 'middle', size: 9, fill: 'var(--glass)' });
+  g += lab(kq, (Math.abs(c.a) < 0.05 ? '0' : fmt(c.a, 0)) + '°', 'site.k.a', 0, -12);
+  // width along a ground edge toward the eye, depth along the other, height up the nearest corner
+  const sy = toward(b.ey) ? 1 : -1, sx = toward(b.ex) ? 1 : -1, off = Math.max(1, 0.06 * Math.max(hw, hd) * 2);
+  g += lab(P(at(0, sy * (hd + off), 0)), mm(c.w), 'site.k.w', 0, 3);
+  g += lab(P(at(sx * (hw + off), 0, 0)), mm(c.d), 'site.k.d', 0, 3);
+  g += lab(P(at(sx * hw, sy * hd, b.h[2])), mm(c.h), 'site.k.h', 26, 0);
+  // the nearest distance to the building, on the ground
+  const G = contextGap(F.S, c), qa = P([G.a[0], G.a[1], 0]), qb = P([G.b[0], G.b[1], 0]);
+  if (G.d > 0.05) g += L(qa[0], qa[1], qb[0], qb[1], { stroke: 'var(--glass)', w: 1, dash: '5 3' }) + CIRCLE(qa[0], qa[1], 2.2, { fill: 'var(--glass)' }) + CIRCLE(qb[0], qb[1], 2.2, { fill: 'var(--glass)' });
+  g += lab([(qa[0] + qb[0]) / 2, (qa[1] + qb[1]) / 2], (G.d > 0.05 ? mm(G.d) : 'touching'), 'site.k.gap', 0, -4);
+  return { g, edit: { id: b.id, faces, rot: { p: kq, C: [b.c[0], b.c[1]] } } };
+}
+/* The selected side's window array, as a drawing program brackets an array:
+   a dotted line through the middles of its windows, a tick at each, held off
+   the facade over the heads, and its number and spacing in the middle - each
+   typed over. A number typed sets the windows out by number, a spacing by
+   spacing; the side then takes the other figure from it. */
+function windowBracket(F, cam, P) {
+  const { sel, S } = F, row = sel.row, fr = row.frame, us = row.units, o = us[0].cell.opening;
+  if (!o) return '';
+  const vb = Math.min(row.h - 0.15, o.v1 + 0.45), out = 0.6;
+  const at = (u, v) => P([fr.O[0] + fr.U[0] * u + fr.W[0] * out, fr.O[1] + fr.U[1] * u + fr.W[1] * out, row.zb + v]);
+  const a = at(us[0].cc, vb), b = at(us[us.length - 1].cc, vb);
+  let g = L(a[0], a[1], b[0], b[1], { stroke: 'var(--glass)', w: 1.2, dash: '2 3' });
+  for (const [k, q] of us.entries()) { const t0 = at(q.cc, vb - (k === 0 || k === us.length - 1 ? 0.35 : 0.18)), t1 = at(q.cc, vb + (k === 0 || k === us.length - 1 ? 0.35 : 0.18)); g += L(t0[0], t0[1], t1[0], t1[1], { stroke: 'var(--glass)', w: 1 }); }
+  const n = us.length, pitch = n > 1 ? Math.abs(us[1].cc - us[0].cc) : sel.row.cell.pitch, m = at((us[0].cc + us[n - 1].cc) / 2, vb + 0.7);
+  const opt = { size: 9.5, fill: 'var(--glass)', bg: .94 };
+  g += TB(m[0] - 4, m[1], n + (n === 1 ? ' window' : ' windows'), Object.assign({ anchor: 'end', edit: 'g.arrN' }, opt));
+  g += TB(m[0] + 4, m[1], '@ ' + mm(pitch), Object.assign({ anchor: 'start', edit: 'g.arrSp' }, opt));
+  return g;
+}
+/** each side's SHGC, written over the top of its facade where the facade faces the eye, typed over in place */
+function shgcLabels(F, cam, P, only) {
+  const { S, B } = F;
+  let g = '';
+  for (const f of only ? [only] : Object.keys(FACADES)) {
+    const rows = B.facades[f].rows, top = rows[rows.length - 1], fr = top.frame;
+    if (!rows.some(r => r.cell)) continue;
+    const q = P([fr.O[0] + fr.W[0] * 0.5, fr.O[1] + fr.W[1] * 0.5, top.zb + top.h + 1.2]);
+    const v = S.shgc && S.shgc[f] !== undefined ? S.shgc[f] : (rows.find(r => r.cell).cell.glz.shgc ?? 0.36);
+    g += TB(q[0], q[1], f + ' glass SHGC ' + fmt(v, 2), { anchor: 'middle', size: 8.5, fill: 'var(--sun)', bg: .9, edit: 'shgc.' + f });
+  }
+  return g;
+}
+/* The selected storey, ready to edit in place, as a massing is: a handle in
+   the middle of each side toward the eye, pushed or pulled to move that side
+   alone; a ring round it at its floor to turn it; its width, depth, turn and
+   offset written where they read, each typed over by a click. */
+function plateEdit(F, i, zb, cam, P) {
+  const S = F.S, p = S.storeys[i], a = storeyRot(S, i) * D2R, C = storeyCentre(S, i), e = cam.e;
+  const ex = [Math.cos(a), -Math.sin(a)], ey = [Math.sin(a), Math.cos(a)], hw = p.w / 2, hd = p.d / 2, h = p.h;
+  const at = (u, v, z) => [C[0] + u * ex[0] + v * ey[0], C[1] + u * ex[1] + v * ey[1], zb + z];
+  const lab = (q, txt, k, dx = 0, dy = 0) => TB(q[0] + dx, q[1] + dy, txt, { anchor: 'middle', size: 9, fill: 'var(--glass)', bg: .92, edit: k });
+  let g = '';
+  const foot = [at(-hw, -hd, 0), at(hw, -hd, 0), at(hw, hd, 0), at(-hw, hd, 0)], roof = foot.map(q => [q[0], q[1], q[2] + h]);
+  g += POLY(foot.map(P), { fill: 'none', stroke: 'var(--glass)', w: 1.4, dash: '5 3' }) + POLY(roof.map(P), { fill: 'none', stroke: 'var(--glass)', w: 1.4, dash: '5 3' });
+  const faces = [], toward = n => n[0] * e[0] + n[1] * e[1] > 0.05;
+  for (const [key, n, u, v] of [['+x', ex, hw, 0], ['-x', [-ex[0], -ex[1]], -hw, 0], ['+y', ey, 0, hd], ['-y', [-ey[0], -ey[1]], 0, -hd]]) {
+    if (!toward(n)) continue;
+    const Q = at(u, v, h / 2), q = P(Q), q1 = P([Q[0] + n[0], Q[1] + n[1], Q[2]]);
+    faces.push({ key, p: q, sv: [q1[0] - q[0], q1[1] - q[1]], n: [n[0], n[1], 0] });
+  }
+  for (const f of faces) g += POLY([[f.p[0] - 5, f.p[1] - 5], [f.p[0] + 5, f.p[1] - 5], [f.p[0] + 5, f.p[1] + 5], [f.p[0] - 5, f.p[1] + 5]], { fill: 'var(--panel)', stroke: 'var(--glass)', w: 1.6 });
+  // the ring at the floor, its knob out past a corner, off every side's handle
+  const DG = Math.SQRT1_2, pc = P(at(0, 0, 0)), pk = P(at(DG, DG, 0)), perM = Math.max(1e-6, Math.hypot(pk[0] - pc[0], pk[1] - pc[1]));
+  const rr = Math.max(Math.hypot(hw, hd) + Math.max(2, 0.1 * Math.hypot(hw, hd)), 40 / perM), ring = [];
+  for (let k = 0; k <= 64; k++) { const t = k / 64 * 2 * Math.PI; ring.push(P(at(rr * Math.sin(t), rr * Math.cos(t), 0))); }
+  g += PATH(ring.map((q, k) => (k ? 'L' : 'M') + fmt(q[0], 1) + ',' + fmt(q[1], 1)).join(' '), { stroke: 'var(--glass)', w: .8, dash: '2 3', op: .7 });
+  const kx = ex[0] * e[0] + ex[1] * e[1] >= 0 ? 1 : -1, ky = ey[0] * e[0] + ey[1] * e[1] >= 0 ? 1 : -1;
+  const kq = P(at(kx * rr * DG, ky * rr * DG, 0));
+  g += CIRCLE(kq[0], kq[1], 7, { fill: 'var(--panel)', stroke: 'var(--glass)', 'stroke-width': 1.6 }) + T(kq[0], kq[1] + 3.5, '↻', { anchor: 'middle', size: 9.5, fill: 'var(--glass)' });
+  g += lab(kq, (Math.abs(p.rot || 0) < 0.05 ? '0' : fmt(p.rot, 1)) + '°' + ((p.rotRel || 'building') === 'below' && i > 0 ? ' on floor below' : ''), 'plnRot', 0, -13);
+  // width and depth along the floor's edges toward the eye; its offset from the building's axis on the roof
+  const sy = toward(ey) ? 1 : -1, sx = toward(ex) ? 1 : -1, off = Math.max(1, 0.05 * Math.max(p.w, p.d));
+  g += lab(P(at(0, sy * (hd + off), 0)), mm(p.w), 'plnW', 0, 3);
+  g += lab(P(at(sx * (hw + off), 0, 0)), mm(p.d), 'plnD', 0, 3);
+  // the ground floor stays centred on the site: only the floors above have an offset to type
+  const top = P(at(0, 0, h));
+  if (i > 0) g += lab(top, 'E ' + mm(p.ox || 0), 'plnOX', -40, 4) + lab(top, 'N ' + mm(p.oy || 0), 'plnOY', 40, 4);
+  // the hull of the storey on the drawing: dragged anywhere in it, it moves
+  const pts = foot.concat(roof).map(P).sort((u, v) => u[0] - v[0] || u[1] - v[1]), crs = (k, u, v) => (u[0] - k[0]) * (v[1] - k[1]) - (u[1] - k[1]) * (v[0] - k[0]);
+  const lo = [], hi = [];
+  for (const q of pts) { while (lo.length >= 2 && crs(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+  for (let k = pts.length - 1; k >= 0; k--) { const q = pts[k]; while (hi.length >= 2 && crs(hi[hi.length - 2], hi[hi.length - 1], q) <= 0) hi.pop(); hi.push(q); }
+  return { g, edit: { st: i, faces, rot: { p: kq, C: C.slice() }, hull: lo.slice(0, -1).concat(hi.slice(0, -1)) } };
+}
+/** a context building drawn: its faces toward the eye, side by side then its top, and the outline of them all */
+function contextArt(b, cam, P, o = {}) {
+  const cs = boxCorners(b), e = cam.e, q = cs.map(P);
+  const sides = [[0, 1, -b.ey[0], -b.ey[1]], [1, 2, b.ex[0], b.ex[1]], [2, 3, b.ey[0], b.ey[1]], [3, 0, -b.ex[0], -b.ex[1]]];
+  const fill = o.ghost ? 'var(--glass)' : '#D6DBD8', op = o.ghost ? .16 : o.front ? .42 : .92;
+  const stroke = o.ghost || o.sel ? 'var(--glass)' : 'var(--ink3)', w = o.sel ? 1.6 : .7, dash = o.ghost ? '5 3' : undefined;
+  let g = '';
+  for (const [i, j, nx, ny] of sides) {
+    const lit = nx * e[0] + ny * e[1];
+    if (lit <= 1e-6) continue;
+    // a side square to the eye a little lighter than one seen at a slant
+    g += POLY([q[i], q[j], q[j + 4], q[i + 4]], { fill: o.ghost ? fill : lit > 0.6 ? '#E1E5E3' : fill, op, stroke, w, dash });
+  }
+  if (e[2] > 1e-6) g += POLY([q[4], q[5], q[6], q[7]], { fill: o.ghost ? fill : '#EEF1EF', op, stroke, w, dash });
+  // the outline on the drawing, for a click to pick it: the hull of its corners
+  const pts = q.slice().sort((a, c) => a[0] - c[0] || a[1] - c[1]), crs = (k, a, c) => (a[0] - k[0]) * (c[1] - k[1]) - (a[1] - k[1]) * (c[0] - k[0]);
+  const lo = [], hi = [];
+  for (const p of pts) { while (lo.length >= 2 && crs(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+  for (let i = pts.length - 1; i >= 0; i--) { const p = pts[i]; while (hi.length >= 2 && crs(hi[hi.length - 2], hi[hi.length - 1], p) <= 0) hi.pop(); hi.push(p); }
+  return { g, hull: lo.slice(0, -1).concat(hi.slice(0, -1)) };
 }
 /** the sun in one facade's coordinates */
 function solarAtFacade(cur, gf) {
@@ -244,11 +387,25 @@ function solarAtFacade(cur, gf) {
 export let axonHits = [];
 /** the draggable facade-azimuth arrow, in drawing coordinates */
 export let axonHandle = null;
+/** the context massing as last drawn, for a click to pick: { id, pts, front } */
+export let axonCtxHits = [];
+/** the selected massing's handles as last drawn: { id, faces: [{ key, p, sv, n }], rot: { p, C } } */
+export let axonCtxEdit = null;
+/** the selected storey's handles, when it is being edited: { st, faces, rot: { p, C }, hull } */
+export let axonPlateEdit = null;
 /** the middle of the selected window's glass, in the world, for zooming to it */
 export let axonFocus = null;
 
+/* A group's labels hidden: its figures and names - the text, and the boxes behind it - taken out of what it drew. */
+const unlabelled = s => s.replace(/<text\b[^>]*>[\s\S]*?<\/text>/g, '').replace(/<rect\b[^>]*fill="var\(--panel\)"[^>]*\/>/g, '');
+const GROUP_OF = Object.fromEntries(AX_LAYERS.map(([k, , gk]) => [k, gk]));
 export function drawAxon(F) {
-  const { S, V, m, cur, sel } = F, Ly = V.layers, AX = V.axcam;
+  const { S, V, m, cur, sel } = F, AX = V.axcam;
+  // a layer shows when it is on and its group is on
+  const Ly = Object.fromEntries(Object.entries(V.layers).map(([k, on]) => [k, on && (V.groups || {})[GROUP_OF[k]] !== false]));
+  const Lb = V.labels || {};
+  // the shadow and the context massing are part of the scene, not layers to switch off
+  Ly.shadow = true; Ly.context = true;
   const cam = axonCamera(S, AX);
   const { Htot, span, Rdome, Rground, P } = cam;
   const gf = m.gf, nrm = [Math.sin(gf * D2R), Math.cos(gf * D2R), 0];
@@ -259,6 +416,10 @@ export function drawAxon(F) {
     axonFocus = toWorld(fr, (o ? m.cc : 0), sel.row.zb + (o ? (o.v0 + o.v1) / 2 : sel.row.h / 2), 0, m.reveal || 0); }
   const sv = cur.up ? sunVec(cur.alt, cur.az) : null;
   let g = defsCommon, over = '';            // over = painted after the block
+  // what one group draws, between two marks; its labels taken out when they are off
+  const mark = () => [g.length, over.length];
+  const labels = (mk, gk) => { if (Lb[gk] !== false) return; g = g.slice(0, mk[0]) + unlabelled(g.slice(mk[0])); over = over.slice(0, mk[1]) + unlabelled(over.slice(mk[1])); };
+  const mSky = mark();
 
   if (Ly.dome) {
     const line = (pts, o) => {
@@ -324,6 +485,8 @@ export function drawAxon(F) {
     }
   }
 
+  labels(mSky, 'sky');
+  const mGround = mark();
   if (Ly.site && F.checks) { const sx = siteGround(F, P); g += sx.g; over += sx.over; }
 
   if (Ly.grid) {
@@ -335,48 +498,69 @@ export function drawAxon(F) {
   }
 
   if (Ly.compass) {
-    const [b, f] = depthSplit(ringPts(Rground, 0), cam);
+    const [b, f] = depthSplit(ringPts(Rdome, 0), cam);
     if (b) g += PATH(b, { stroke: 'var(--ink3)', w: .7, op: .7 });
     if (f) over += PATH(f, { stroke: 'var(--ink3)', w: .7, op: .7 });
     for (let a = 0; a < 360; a += 15) {
       const len = a % 90 === 0 ? 0.10 : a % 45 === 0 ? 0.06 : 0.035;
-      g += L(...P(compassPt(a, Rground, 0)), ...P(compassPt(a, Rground * (1 - len), 0)), { stroke: 'var(--ink3)', w: a % 45 === 0 ? .8 : .5, op: .8 });
+      g += L(...P(compassPt(a, Rdome, 0)), ...P(compassPt(a, Rdome * (1 - len), 0)), { stroke: 'var(--ink3)', w: a % 45 === 0 ? .8 : .5, op: .8 });
     }
     [['N', 0], ['E', 90], ['S', 180], ['W', 270]].forEach(([lab, a]) => {
-      const q = P(compassPt(a, Rground * 1.14, 0));
+      const q = P(compassPt(a, Rdome * 1.14, 0));
       g += TB(q[0], q[1] + 3.5, lab + ' ' + a + '°', { anchor: 'middle', size: 10, fill: a === 0 ? 'var(--ink)' : 'var(--ink2)', bg: .85 });
     });
     [['NE', 45], ['SE', 135], ['SW', 225], ['NW', 315]].forEach(([lab, a]) => {
-      const q = P(compassPt(a, Rground * 1.10, 0));
+      const q = P(compassPt(a, Rdome * 1.10, 0));
       g += T(q[0], q[1] + 3, lab, { anchor: 'middle', size: 8, fill: 'var(--ink3)' });
     });
-    g += POLY([P(compassPt(0, Rground, 0)), P(compassPt(354, Rground * 0.90, 0)), P(compassPt(6, Rground * 0.90, 0))], { fill: 'var(--ink)' });
+    g += POLY([P(compassPt(0, Rdome, 0)), P(compassPt(354, Rdome * 0.90, 0)), P(compassPt(6, Rdome * 0.90, 0))], { fill: 'var(--ink)' });
   }
 
   /* the selected facade's azimuth on the ground, always drawn: dragging it
      turns the building under the sky, as the marker under the chart does */
   {
-    const o = P([0, 0, 0]), nEnd = P(compassPt(gf, Rground * 0.98, 0)), knob = P(compassPt(gf, Rground * 1.02, 0));
+    const o = P([0, 0, 0]), nEnd = P(compassPt(gf, Rdome * 0.97, 0)), knob = P(compassPt(gf, Rdome, 0));
     g += L(o[0], o[1], nEnd[0], nEnd[1], { stroke: 'var(--glass)', w: 1.3, marker: 'url(#ad)' });
     over += CIRCLE(knob[0], knob[1], 6, { fill: 'var(--panel)', stroke: 'var(--glass)', 'stroke-width': 1.6 })
       + CIRCLE(knob[0], knob[1], 2.4, { fill: 'var(--glass)' });
     axonHandle = { a: P(compassPt(gf, Rground * 0.45, 0)), b: knob };
+    // the selected side's surface azimuth, from due south, by the arrow that turns the building: typed over in place
+    const sa = wrap180(gf - 180);
+    over += TB(knob[0], knob[1] - 13, 'surface azimuth ' + (Math.abs(sa) < 0.05 ? '0' : fmt(sa, 1)) + '°', { anchor: 'middle', size: 8.5, fill: 'var(--glass)', bg: .9, edit: 'surfAz' });
   }
 
   if (Ly.shadow && cur.up && cur.alt > 2) {
-    // every storey's footprint and its ceiling carried down the sun, hulled
-    const pts = [];
-    for (const fo of foots) {
-      const t = Math.min(fo.z1 / sv[2], Rground * 2.6);
-      for (const p of fo.pts) { pts.push([p[0], p[1]]); pts.push([p[0] - sv[0] * t, p[1] - sv[1] * t]); }
-    }
-    pts.sort((p, q) => p[0] - q[0] || p[1] - q[1]);
-    const crs = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-    const lo = [], hi = [];
-    for (const p of pts) { while (lo.length >= 2 && crs(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
-    for (let i = pts.length - 1; i >= 0; i--) { const p = pts[i]; while (hi.length >= 2 && crs(hi[hi.length - 2], hi[hi.length - 1], p) <= 0) hi.pop(); hi.push(p); }
-    g += POLY(lo.slice(0, -1).concat(hi.slice(0, -1)).map(p => P([p[0], p[1], 0])), { fill: 'var(--shadefill)', op: .6 });
+    // every storey's footprint and its ceiling carried down the sun, hulled; each context building's on its own
+    const cast = (feet, z) => { const t = Math.min(z / sv[2], Rground * 2.6), pts = []; for (const p of feet) { pts.push([p[0], p[1]]); pts.push([p[0] - sv[0] * t, p[1] - sv[1] * t]); } return pts; };
+    const shade = pts => {
+      pts.sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+      const crs = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+      const lo = [], hi = [];
+      for (const p of pts) { while (lo.length >= 2 && crs(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+      for (let i = pts.length - 1; i >= 0; i--) { const p = pts[i]; while (hi.length >= 2 && crs(hi[hi.length - 2], hi[hi.length - 1], p) <= 0) hi.pop(); hi.push(p); }
+      return POLY(lo.slice(0, -1).concat(hi.slice(0, -1)).map(p => P([p[0], p[1], 0])), { fill: '#7E95A3' });
+    };
+    // drawn solid and faded together, so where two shadows overlap they read as one shadow, not a darker one
+    let sh = shade(foots.flatMap(fo => cast(fo.pts, fo.z1)));
+    if (Ly.context) for (const b of F.B.context || []) sh += shade(cast(boxCorners(b).slice(0, 4), 2 * b.h[2]));
+    g += '<g opacity=".34">' + sh + '</g>';
   }
+
+  /* Context buildings, whole: one standing beyond the block, seen from here,
+     is drawn before it; one standing in front, after it and see-through, so
+     the block reads through it. The one being edited is outlined. */
+  axonCtxHits = [];
+  const ctxSel = S.site && S.site.ctxSel, ctxFront = [];
+  if (Ly.context) {
+    const bs = (F.B.context || []).map(b => ({ b, d: b.c[0] * cam.e[0] + b.c[1] * cam.e[1] })).sort((a, b) => a.d - b.d);
+    for (const { b, d } of bs) {
+      const front = d > 0, art = contextArt(b, cam, P, { front, sel: b.id === ctxSel });
+      axonCtxHits.push({ id: b.id, pts: art.hull, front });
+      if (front) ctxFront.push(art.g); else g += art.g;
+    }
+  }
+
+  labels(mGround, 'ground');
 
   /* ---- the block ----
      Storey by storey from the ground up: each storey's walls, then its units,
@@ -435,14 +619,14 @@ export function drawAxon(F) {
       F.checks && F.checks.glassBad(u.f, u.st, u.i) ? q => RED_GLASS[q.kind] || style(q) : style);
     // a device the by-law does not allow where it stands is drawn red
     for (const u of drawn) {
-      const bad = F.checks && F.checks.badOf(u.f, u.st, u.i);
+      const bad = Ly.site && F.checks && F.checks.badOf(u.f, u.st, u.i);
       g += paintFaces(order(u.front, u.f, u.st, []), proj(u), eLoc(u.f, u.st), bad && bad.size ? q => (q.kind === 'dev' && bad.has(q.sys) ? RED_DEV : style(q)) : style);
     }
     // the glass of every unit drawn can be clicked, and the selected one is outlined
     for (const u of drawn) {
       const o = u.cell.opening, pr = proj(u), pts = [[o.u0, o.v0, 0], [o.u1, o.v0, 0], [o.u1, o.v1, 0], [o.u0, o.v1, 0]].map(pr);
       hits.push({ f: u.f, st: u.st, unit: u.i, d: depth(u), pts });
-      if (u.f === sel.f && u.st === sel.st && u.i === sel.unit) g += POLY(pts, { fill: 'var(--glass)', op: .22, stroke: 'var(--glass)', w: 2.4 });
+      if (u.f === sel.f && u.st === sel.st && u.i === sel.unit) g += POLY(pts, { fill: 'var(--glass)', op: .42, stroke: 'var(--glass)', w: 3 }) + POLY(pts, { fill: 'none', stroke: 'var(--panel)', w: 1.2, dash: '3 2.5' });
       else if (u.broken) g += POLY(pts, { fill: 'none', stroke: 'var(--sun)', w: 1.2, dash: '3 2' });
     }
     // the roof of this storey: what the next one does not cover shows
@@ -454,6 +638,15 @@ export function drawAxon(F) {
       { fill: 'none', stroke: 'var(--glass)', w: 1.4, dash: '5 3' });
   }
   axonHits = hits.sort((a, b) => a.d - b.d);
+  g += ctxFront.join('');
+  // a context building being placed: its ghost where the pointer is on the ground, square to the axes it will be read in
+  if (V.place && V.place.on && V.place.P) {
+    const dr = Object.assign(CTX_DRAFT0(), S.site && S.site.draft), a = contextAxes(S).a * D2R;
+    const gb = { c: [V.place.P[0], V.place.P[1], dr.h / 2], ex: [Math.cos(a), -Math.sin(a)], ey: [Math.sin(a), Math.cos(a)], h: [dr.w / 2, dr.d / 2, dr.h / 2] };
+    const art = contextArt(gb, cam, P, { ghost: true });
+    const top = P([gb.c[0], gb.c[1], dr.h]);
+    over += art.g + TB(top[0], top[1] - 8, 'click to place · ' + fmt(dr.w * 1000, 0) + ' × ' + fmt(dr.d * 1000, 0) + ' × ' + fmt(dr.h * 1000, 0) + ' mm', { anchor: 'middle', size: 9, fill: 'var(--glass)', bg: .9 });
+  }
   { const fr = sel.row.frame, mid = P([fr.O[0], fr.O[1], cam.Htot + span * 0.06]);
     g += TB(mid[0], mid[1], seenSel ? sel.f + ' · storey ' + (sel.st + 1) : sel.f + ' side, behind', { anchor: 'middle', size: 10, fill: 'var(--glass)' }); }
   g += over;
@@ -466,6 +659,7 @@ export function drawAxon(F) {
   /* the sun-angle triangle, in the vertical plane square to the facade: the
      angle sits at its pivot and opens toward the sun.
      It is the vertical shadow angle, equal to the altitude only when gamma = 0. */
+  const mTri = mark();
   if (Ly.triangle) {
     const O = O0;
     if (cur.onFacade && cur.vsa > 0.6) {
@@ -498,6 +692,8 @@ export function drawAxon(F) {
     }
   }
 
+  labels(mTri, 'angles');
+  const mRay = mark();
   /* the sun on the dome at exactly the radius the arcs are drawn at, and the ray
      it sends through the origin - parallel to the sun vector by construction */
   if (Ly.ray && cur.up) {
@@ -512,6 +708,8 @@ export function drawAxon(F) {
       { anchor: 'middle', size: 9, fill: 'var(--sun)', bg: .9 });
   }
 
+  labels(mRay, 'sky');
+  const mAng = mark();
   /* the composition of angles, at the foot of the selected facade
      where the profile angle is drawn too: the sun ray's horizontal projection,
      the solar altitude beta above it, the solar azimuth measured from due
@@ -532,7 +730,6 @@ export function drawAxon(F) {
       // the surface azimuth: due south round to the facade normal
       g += PATH(pth([O, at(dirOf(gf), span * 0.5)]), { stroke: 'var(--glass)', w: 1.2 });
       if (Math.abs(dev) > 0.5) g += PATH(pth(arcG(180, 180 + dev, span * 0.42)), { stroke: 'var(--glass)', w: 1.2, marker: 'url(#ad)' });
-      lab(180 + dev / 2, span * 0.48, 'surface azimuth ' + fmt(dev, 0) + '°', 'var(--glass)', 8.5);
     }
     if (Ly.angles && cur.up) {
       const gdir = v3.unit([sv[0], sv[1], 0]);
@@ -558,6 +755,7 @@ export function drawAxon(F) {
     }
   }
 
+  labels(mAng, 'angles');
   if (!Ly.compass) {                      // a north arrow only when the compass is off
     const o = P([0, 0, 0]), n1 = P([0, 1, 0]);
     let dx = n1[0] - o[0], dy = n1[1] - o[1];
@@ -568,11 +766,32 @@ export function drawAxon(F) {
     g += TB(ax + dx * (rr + 11), ay + dy * (rr + 11) + 4, 'N', { size: 12, fill: 'var(--ink)', mono: false, anchor: 'middle' });
   }
 
-  g += T(12, 20, 'view ' + fmt(wrap360(AX.daz), 0) + '° az / ' + fmt(AX.el, 0) + '° above horizon · ×' + fmt(AX.zoom, 2), { size: 9, fill: 'var(--ink3)' });
-  g += T(12, 32, 'orthographic · dome radius ' + fmt(Rdome, 0) + ' m', { size: 9, fill: 'var(--ink3)' });
-  if (Ly.triangle) g += T(12, 44, 'profile angle θ: in the plane square to the selected facade, ' + { ground: 'from the ground at its foot', level: 'from the floor of the selected window', window: 'about the middle of the selected window' }[angAt], { size: 8.5, fill: 'var(--sun)' });
-  g += T(12, H - 14, S.storeys.length + (S.storeys.length === 1 ? ' storey' : ' storeys') + ' · storey ' + (sel.st + 1) + ' plate ' + fmt(S.storeys[sel.st].w, 1) + ' × ' + fmt(S.storeys[sel.st].d, 1) + ' m · building north offset ' + fmt(S.rot || 0, 0) + '°'
-    + (Math.abs(storeyRot(S, sel.st) - (S.rot || 0)) > 0.05 ? ', this floor at ' + fmt(storeyRot(S, sel.st), 1) + '°' : '')
-    + ' · ' + sel.f + ' facade azimuth ' + fmt(gf, 0) + '° · drag its arrow to turn the building', { size: 9, fill: 'var(--ink3)' });
+  // the selected storey, ready to edit in place
+  axonPlateEdit = null;
+  if (V.plate && V.plate.on) {
+    const pe = plateEdit(F, sel.st, zbs[sel.st], cam, P);
+    g += pe.g; axonPlateEdit = pe.edit;
+    g += T(12, 56, sel.st === 0 ? 'ground floor selected: it stays centred on the site · pull a face · turn it by its ring · click a figure to type it'
+      : 'storey ' + (sel.st + 1) + ' selected: drag it to move · pull a face · turn it by its ring · click a figure to type it' + (S.matchAbove.plate ? ' · the floors above follow' : ''), { size: 8.5, fill: 'var(--glass)' });
+  }
+  // the selected side's window array, bracketed as a drawing program brackets an array: its number and its spacing typed over
+  if (V.plate && V.plate.on && sel.row.cell && sel.row.units.length) g += windowBracket(F, cam, P);
+  // the selected side's SHGC, above its facade, typed over - while a window or a wall of that side is selected
+  if (V.plate && V.plate.on) g += shgcLabels(F, cam, P, sel.f);
+  // the selected massing, ready to edit in place, over everything
+  axonCtxEdit = null;
+  const cSel = Ly.context && ctxSel && (S.site.ctx || []).find(c => c.id === ctxSel), bSel = cSel && (F.B.context || []).find(b => b.id === ctxSel);
+  if (bSel) {
+    const ed = contextEdit(F, bSel, cSel, cam, P);
+    g += ed.g; axonCtxEdit = ed.edit;
+    // its other instances, outlined where they stand
+    const mates = cSel.grp ? (S.site.ctx || []).filter(c => c.grp === cSel.grp && c.id !== cSel.id).map(c => c.id) : [];
+    for (const b of (F.B.context || []).filter(b => mates.includes(b.id))) {
+      const cs = boxCorners(b);
+      g += POLY(cs.slice(0, 4).map(P), { fill: 'none', stroke: 'var(--glass)', w: 1, dash: '2 3' }) + POLY(cs.slice(4).map(P), { fill: 'none', stroke: 'var(--glass)', w: 1, dash: '2 3' });
+    }
+    const who = mates.length ? 'instance, one of ' + (mates.length + 1) + (cSel.inheritRot ? ', passing its turns on' : '') + ' · ' : 'massing selected: ';
+    g += T(12, 56, who + 'drag it to move (Alt: a copy or instance) · pull a face · turn it by its ring · click a figure to type it · right-click for instances · Delete removes it', { size: 8.5, fill: 'var(--glass)' });
+  }
   return svg(g, 'Interactive 3D view of the block with the sun path dome, compass and solar angle constructions');
 }

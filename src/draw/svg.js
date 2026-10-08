@@ -70,11 +70,14 @@ export const sunKnob = (x, y) => CIRCLE(x, y, 11, { fill: 'var(--sun)', opacity:
 export function tickLine(x1, y1, x2, y2, o = {}) {
   const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len;
   const tx = (ux - uy) * 3.2, ty = (ux + uy) * 3.2, col = o.stroke || 'var(--ink3)';
+  // each end closed by a tick and by a short end line square to the dimension
+  const px = -uy * 4.5, py = ux * 4.5, end = { stroke: col, w: (o.w || 1) * .9 };
   return L(x1, y1, x2, y2, o) + L(x1 - tx, y1 - ty, x1 + tx, y1 + ty, { stroke: col, w: (o.w || 1) * 1.4 })
-    + L(x2 - tx, y2 - ty, x2 + tx, y2 + ty, { stroke: col, w: (o.w || 1) * 1.4 });
+    + L(x2 - tx, y2 - ty, x2 + tx, y2 + ty, { stroke: col, w: (o.w || 1) * 1.4 })
+    + L(x1 - px, y1 - py, x1 + px, y1 + py, end) + L(x2 - px, y2 - py, x2 + px, y2 + py, end);
 }
 /** a dimension line closed by ticks, with extension lines and a centred figure */
-export function dim(x1, y1, x2, y2, label, off = 0, side = 1) {
+export function dim(x1, y1, x2, y2, label, off = 0, side = 1, edit) {
   const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1;
   const nx = -dy / len * off * side, ny = dx / len * off * side;
   const a = [x1 + nx, y1 + ny], b = [x2 + nx, y2 + ny];
@@ -82,10 +85,56 @@ export function dim(x1, y1, x2, y2, label, off = 0, side = 1) {
   s += L(x1, y1, a[0], a[1], { stroke: 'var(--ink3)', w: .5, dash: '2 2' });
   s += L(x2, y2, b[0], b[1], { stroke: 'var(--ink3)', w: .5, dash: '2 2' });
   const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2, vertical = Math.abs(dx) < Math.abs(dy);
+  // a dimension that can be typed over: its figure in the editing colour, boxed, a click away
+  if (edit) return s + TB(mx, my + 3, label, { anchor: 'middle', size: 9, fill: 'var(--glass)', bg: 1, edit });
   s += RECT(mx - (vertical ? 16 : label.length * 2.6 + 3), my - 6, vertical ? 32 : label.length * 5.2 + 6, 11, { fill: 'var(--panel)' });
   s += T(mx, my + 3, label, { anchor: 'middle', size: 9, fill: 'var(--ink2)' });
   return s;
 }
+
+/* A grip: a small square on the drawing that is dragged along one direction
+   to change one figure. g = { p: [x, y], key, from, dir: [dx, dy] - where the
+   grip goes on the sheet for each metre the figure grows - and mul, when the
+   figure grows by more than the grip moves (a width pulled at one jamb). */
+export const gripMark = (x, y) => POLY([[x - 4.5, y - 4.5], [x + 4.5, y - 4.5], [x + 4.5, y + 4.5], [x - 4.5, y + 4.5]], { fill: 'var(--panel)', stroke: 'var(--glass)', w: 1.5 });
+/** an array of members bracketed: a dotted line through them, a tick at each, and its number and spacing typed over */
+export function arrayBracket(pts, horizontal, n, sp, word) {
+  if (!pts.length) return '';
+  const a = pts[0], b = pts[pts.length - 1];
+  let s = L(a[0], a[1], b[0], b[1], { stroke: 'var(--glass)', w: 1.2, dash: '2 3' });
+  pts.forEach((p, i) => { const t = i === 0 || i === pts.length - 1 ? 6 : 3.5; s += horizontal ? L(p[0], p[1] - t, p[0], p[1] + t, { stroke: 'var(--glass)', w: 1 }) : L(p[0] - t, p[1], p[0] + t, p[1], { stroke: 'var(--glass)', w: 1 }); });
+  const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2, o = { size: 9, fill: 'var(--glass)', bg: .94 };
+  if (horizontal) {
+    s += TB(mx - 3, my - 9, n + ' ' + word + (n === 1 ? '' : 's'), Object.assign({ anchor: 'end', edit: 'a.arrN' }, o));
+    if (n > 1) s += TB(mx + 3, my - 9, '@ ' + fmt(sp * 1000, 0) + ' mm', Object.assign({ anchor: 'start', edit: 'a.arrSp' }, o));
+  } else {
+    s += TB(mx - 9, my - 3, n + ' ' + word + (n === 1 ? '' : 's'), Object.assign({ anchor: 'end', edit: 'a.arrN' }, o));
+    if (n > 1) s += TB(mx - 9, my + 11, '@ ' + fmt(sp * 1000, 0) + ' mm', Object.assign({ anchor: 'end', edit: 'a.arrSp' }, o));
+  }
+  return s;
+}
+
+/** a gumball: a red arrow to the right and a green one up, each moving the
+ *  device along that axis of the sheet only - dragged, or clicked to type how
+ *  far to move it - and a centre that opens the device's settings. `axes` are
+ *  the figures the two arrows move, with the sheet direction each grows in. */
+export function gumball(grips, ox, oy, axes) {
+  const COL = ['#c2412d', '#2f8a4e'], SCR = [[1, 0], [0, -1]];
+  let s = '';
+  axes.forEach((a, i) => {
+    const [ux, uy] = SCR[i], tx = ox + 34 * ux, ty = oy + 34 * uy, c = COL[i];
+    s += L(ox + 6 * ux, oy + 6 * uy, tx - 6 * ux, ty - 6 * uy, { stroke: c, w: 1.8 });
+    s += POLY([[tx, ty], [tx - 10 * ux - 5 * uy, ty - 10 * uy + 5 * ux], [tx - 10 * ux + 5 * uy, ty - 10 * uy - 5 * ux]], { fill: c, stroke: c, w: .8 });
+    // which way the figure runs along the arrow, so a typed move goes the way the arrow points
+    const sgn = Math.sign(ux * a.dir[0] + uy * a.dir[1]) || 1;
+    grips.push({ p: [tx - 4 * ux, ty - 4 * uy], key: a.key, from: a.from, dir: a.dir, arrow: true, sgn });
+  });
+  grips.push({ p: [ox, oy], pop: true });
+  return s + CIRCLE(ox, oy, 5.5, { fill: 'var(--panel)', stroke: 'var(--ink2)', 'stroke-width': 1.4 }) + CIRCLE(ox, oy, 1.8, { fill: 'var(--ink2)' });
+}
+
+/** a length as the drawings write it: in millimetres */
+export const mm = v => fmt(v * 1000, 0) + ' mm';
 
 /** an angle arc, screen angles measured anticlockwise from +x */
 export function arc(cx, cy, r, a0, a1, col) {
