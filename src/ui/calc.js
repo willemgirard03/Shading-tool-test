@@ -86,7 +86,9 @@ export function recSun(F) {
    each 1/n as deep at 1/n the spacing: the cut-off is set by depth over
    spacing, so n shallower members do what one deep one does. How many is the
    reader's to try, here, and is not part of the design. */
-export const recUI = { nh: 1, nv: 1 };
+export const recUI = { nh: 1, nv: 1, nc: 4 };
+/* Past this, a member would have to project so far that it is no solution: say so rather than draw it */
+export const IDEAL_MAX = 10;
 export const MEMBERS_MAX = 12;
 const members = (key, n, tip) => `<label class="recn" title="${tip}"><span>Members</span><input type="range" min="1" max="${MEMBERS_MAX}" step="1" value="${n}" data-recn="${key}" aria-label="Number of members"><output data-recout="${key}">${n}</output></label>`;
 /** n horizontal members over a window: the top one at the head, each shading the gap below it; heights from the storey's floor */
@@ -94,90 +96,150 @@ export function hSolution(m, th, n) {
   const h = m.winH, pitch = h / n, tT = Math.tan(th * D2R);
   return { n, pitch, d: pitch / tT, Ph: h / tT, zs: Array.from({ length: n }, (_, k) => m.head - k * pitch) };
 }
+/* The ideals drawn to the window as it is built - its storey height, its slabs,
+   the wall's thickness, the sill and the head, the glass set back by its
+   reveal - in the plan's and the section's own graphics, without their
+   handles. The members are drawn a token thickness; the hand method treats
+   them as having none, and so does what is worked out here. */
+const DRAWN_T = 0.02;
+const RECDEFS = '<defs><pattern id="recpoche" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" fill="var(--panel)"/><line x1="0" y1="0" x2="0" y2="5" stroke="var(--ink3)" stroke-width=".6"/></pattern></defs>';
+const POCHE = { fill: 'url(#recpoche)', stroke: 'var(--ink)', 'stroke-width': .8 };
 /** a section through the window: the members at the head and down it, each just shading the gap below it */
-function sectionDiagram(h, sill, sol, th) {
-  const W = 260, H = 190, x0 = 70, yF = 168, d = sol.d;
-  const k = Math.min(120 / Math.max(h + sill, 0.5), 150 / Math.max(Math.min(d, 4 * h), 0.3));
-  const y = v => yF - v * k, cut = d > 4 * h, P = cut ? 4 * h : d, tT = Math.tan(th * D2R);
-  let g = RECT(x0 - 16, y(sill + h + 0.35), 16, (sill + h + 0.35) * k, { fill: 'url(#recpoche)', stroke: 'var(--ink)', 'stroke-width': .8 });
-  g += RECT(x0 - 16, y(sill + h), 16, h * k, { fill: 'var(--panel)', stroke: 'none' }) + L(x0 - 6, y(sill), x0 - 6, y(sill + h), { stroke: 'var(--glass)', w: 2 });
-  g += L(0, yF, W, yF, { stroke: 'var(--ink3)', w: .7 }) + T(4, yF + 12, 'floor', { size: 8, fill: 'var(--ink3)' }) + T(W - 4, yF + 12, 'outside →', { size: 8, anchor: 'end', fill: 'var(--ink3)' });
+function sectionDiagram(m, sol, th) {
+  const W = 280, H = 210, h = m.storeyH, slab = m.slab || 0, wt = m.wallT || 0.3, d = sol.up ? sol.Ph : sol.d, cut = d > 4 * m.winH, P = cut ? 4 * m.winH : d, IN = 0.9;
+  const top = Math.max(h, sol.up ? m.head + sol.d : 0);
+  const k = Math.min((H - 36) / (top + slab), (W - 40) / (IN + wt + P + 0.25));
+  const xo = 20 + (IN + wt) * k, yF = H - 16 - slab * k, y = v => yF - v * k, X = u => xo + u * k, tT = Math.tan(th * D2R);
+  const box = (u0, u1, v0, v1, o) => RECT(X(Math.min(u0, u1)), y(Math.max(v0, v1)), Math.abs(u1 - u0) * k, Math.abs(v1 - v0) * k, o);
+  let g = box(-wt - IN, 0, -slab, 0, POCHE) + box(-wt - IN, 0, h - slab, h, POCHE);            // the floor slab, and the slab above
+  g += box(-wt, 0, 0, m.sill, POCHE);                                                            // the wall under the sill
+  if (m.head < h - slab - 1e-3) g += box(-wt, 0, m.head, h - slab, POCHE);                        // and over the head
+  const gx = X(-(m.reveal || 0));
+  g += L(gx, y(m.sill), gx, y(m.head), { stroke: 'var(--glass)', w: 2.2 });                     // the glass, set back by its reveal
+  g += L(X(-wt - IN), y(0), X(-wt), y(0), { stroke: 'var(--ink3)', w: .6 }) + T(X(-wt - IN) + 2, y(0) - 4, 'floor', { size: 8, fill: 'var(--ink3)' });
+  g += T(W - 4, H - 4, 'outside →', { size: 8, anchor: 'end', fill: 'var(--ink3)' });
+  const tpx = Math.max(2, DRAWN_T * k);
+  if (sol.up) {
+    // upright members standing on the head, out to where the ray from the sill passes: each as tall as the sun climbs across one spacing
+    for (let j = 1; j <= sol.n; j++) {
+      if (j * sol.pitch > P + 1e-9) break;
+      g += RECT(X(j * sol.pitch) - tpx / 2, y(m.head + sol.d), tpx, sol.d * k, { fill: 'var(--sun)' });
+      // the ray that grazes this member's top, from the foot of the one inside it
+      const x0 = X((j - 1) * sol.pitch), run = sol.pitch * k + 30;
+      g += L(x0, y(m.head), x0 + run, y(m.head) - run * tT, { stroke: 'var(--sun)', w: 1, dash: '4 3' });
+    }
+    g += L(gx, y(m.sill), gx + (P * k + 40), y(m.sill) - (P * k + 40) * tT, { stroke: 'var(--sun)', w: 1, dash: '4 3' });
+    g += T(X(-wt) - 4, (y(m.sill) + y(m.head)) / 2, 'h ' + m2(m.winH), { size: 8.5, anchor: 'end', fill: 'var(--ink2)' });
+    g += T(xo + P * k / 2, y(m.head) + 12, (cut ? 'Ph ≥ ' : 'Ph ') + m2(sol.Ph), { size: 8.5, anchor: 'middle', fill: 'var(--sun)' });
+    g += T(Math.min(W - 4, xo + P * k + 6), y(m.head + sol.d) + 4, 'height ' + m2(sol.d), { size: 8.5, anchor: xo + P * k + 80 > W ? 'end' : 'start', fill: 'var(--sun)' });
+    if (sol.n > 1) g += T(X(sol.pitch / 2), y(m.head + sol.d) - 6, 's ' + m2(sol.pitch), { size: 8.5, anchor: 'middle', fill: 'var(--ink2)' });
+    g += T(xo + 16, y(m.sill) - 3, 'θ ' + deg(th), { size: 8.5, fill: 'var(--sun)' });
+    return svgOf(W, H, RECDEFS + g, 'Section: ' + sol.n + ' upright members standing on the head, out from the facade, shading the whole window at this instant, drawn to the window as built');
+  }
   for (const z of sol.zs) {
-    g += RECT(x0, y(z) - 3, P * k, 3, { fill: 'var(--sun)' });
-    if (cut) g += T(x0 + P * k + 4, y(z) + 3, '…', { size: 10, fill: 'var(--sun)' });
-    // the ray at θ from the foot of the gap below, past the member's tip
-    const ox = x0 - 6, oy = y(z - sol.pitch), run = P * k + 6 + 50;
-    g += L(ox, oy, ox + run, oy - run * tT, { stroke: 'var(--sun)', w: 1, dash: '4 3' });
+    g += RECT(xo, y(z), P * k, tpx, { fill: 'var(--sun)' });
+    if (cut) g += T(xo + P * k + 4, y(z) + 3, '…', { size: 10, fill: 'var(--sun)' });
+    // the ray at θ from the foot of the gap below, at the glass, past the member's tip
+    const oy = y(z - sol.pitch), run = (xo - gx) + P * k + 40;
+    g += L(gx, oy, gx + run, oy - run * tT, { stroke: 'var(--sun)', w: 1, dash: '4 3' });
   }
-  g += T(x0 - 22, (y(sill) + y(sill + h)) / 2, 'h ' + m2(h), { size: 8.5, anchor: 'end', fill: 'var(--ink2)' });
-  g += T(x0 + P * k / 2, y(sill + h) - 7, (sol.n === 1 ? 'Ph ' : 'd ') + (cut ? '≥ ' : '') + m2(d), { size: 8.5, anchor: 'middle', fill: 'var(--sun)' });
-  if (sol.n > 1) g += T(x0 - 22, y(sill + h) + 3, 's ' + m2(sol.pitch), { size: 8.5, anchor: 'end', fill: 'var(--ink2)' });
-  g += T(x0 + 18, y(sill) - 3, 'θ ' + deg(th), { size: 8.5, fill: 'var(--sun)' });
-  const defs = '<defs><pattern id="recpoche" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" fill="var(--panel)"/><line x1="0" y1="0" x2="0" y2="5" stroke="var(--ink3)" stroke-width=".6"/></pattern></defs>';
-  return svgOf(W, H, defs + g, 'Section: ' + (sol.n === 1 ? 'an overhang at the head' : sol.n + ' louvres') + ' deep enough to shade the whole window at this instant');
+  g += T(X(-wt) - 4, (y(m.sill) + y(m.head)) / 2, 'h ' + m2(m.winH), { size: 8.5, anchor: 'end', fill: 'var(--ink2)' });
+  // the depth, past the top member's tip
+  g += T(Math.min(W - 4, xo + P * k + (cut ? 14 : 4)), y(sol.zs[0]) + 4, (sol.n === 1 ? 'Ph ' : 'd ') + (cut ? '≥ ' : '') + m2(d), { size: 8.5, anchor: xo + P * k + 70 > W ? 'end' : 'start', fill: 'var(--sun)' });
+  if (sol.n > 1) g += T(X(-wt) - 4, y(m.head) + 10, 's ' + m2(sol.pitch), { size: 8.5, anchor: 'end', fill: 'var(--ink2)' });
+  g += T(xo + 16, y(m.sill) - 3, 'θ ' + deg(th), { size: 8.5, fill: 'var(--sun)' });
+  return svgOf(W, H, RECDEFS + g, 'Section: ' + (sol.n === 1 ? 'an overhang at the head' : sol.n + ' louvres') + ' deep enough to shade the whole window at this instant, drawn to the window as built');
 }
-/** a plan of the window: n fins from the jamb the sun comes from, each just shading the gap beside it */
-function planDiagram(w, Pd, gam, n) {
-  const W = 260, H = 190, yW = 40, d = Pd / n, k = Math.min(150 / Math.max(w, 0.5), 120 / Math.max(Math.min(d, 4 * w), 0.3));
-  const cx = W / 2, x0 = cx - w * k / 2, x1 = cx + w * k / 2, cut = d > 4 * w, P = cut ? 4 * w : d;
-  // the fins stand from the jamb the sun comes from - the right, seen from outside, when γ > 0; from above, outside is down
-  const right = gam > 0, dir = right ? -1 : 1, fin0 = right ? x1 : x0, step = w * k / n, tg = Math.tan(Math.abs(gam) * D2R);
-  let g = RECT(10, yW - 14, x0 - 10, 14, { fill: 'var(--ink3)', opacity: .25 }) + RECT(x1, yW - 14, W - 10 - x1, 14, { fill: 'var(--ink3)', opacity: .25 });
-  g += L(x0, yW - 6, x1, yW - 6, { stroke: 'var(--glass)', w: 2.2 });
-  g += T(cx, yW - 24, 'w ' + m2(w), { size: 8.5, anchor: 'middle', fill: 'var(--ink2)' }) + T(W - 6, H - 6, 'outside ↓', { size: 8, anchor: 'end', fill: 'var(--ink3)' });
-  for (let j = 0; j < n; j++) {
-    const fx = fin0 + dir * j * step;
-    g += RECT(fx - 1.5, yW, 3, P * k, { fill: 'var(--sun)' });
-    if (cut) g += T(fx, yW + P * k + 12, '…', { size: 10, anchor: 'middle', fill: 'var(--sun)' });
-    // the ray at γ from the far side of the gap, past the fin's tip
-    const ox = fx + dir * step, run = P * k + 46;
-    g += L(ox, yW - 6, ox - dir * run * tg, yW - 6 + run, { stroke: 'var(--sun)', w: 1, dash: '4 3' });
+/** a plan of the window, outside down: n fins from the jamb the sun comes from, each just shading the gap beside it */
+function planDiagram(m, Pd, gam, n) {
+  const W = 280, H = 210, w = m.winW, wt = m.wallT || 0.3, d = Pd / n, cut = d > 4 * w, P = cut ? 4 * w : d;
+  const pier = m.run ? 0 : Math.min(0.6, Math.max(0, (m.pitch - w) / 2)), IN = 0.5;
+  const k = Math.min((W - 30) / (w + 2 * pier + 0.2), (H - 50) / (IN + wt + P + 0.2));
+  const cx = W / 2, yo = 14 + (IN + wt) * k, X = u => cx + u * k, Y = v => yo + v * k;    // v: out from the wall face, outside down
+  const right = gam > 0, dir = right ? -1 : 1, j0 = right ? w / 2 : -w / 2, step = w / n, tg = Math.tan(Math.abs(gam) * D2R);
+  let g = '';
+  // the piers either side, cut, and the wall's line where the glass runs glass to glass
+  if (pier > 0) g += RECT(X(-w / 2 - pier), Y(-wt), pier * k, wt * k, POCHE) + RECT(X(w / 2), Y(-wt), pier * k, wt * k, POCHE);
+  else g += L(X(-w / 2 - 0.1), Y(0), X(w / 2 + 0.1), Y(0), { stroke: 'var(--ink3)', w: .6, dash: '3 2' });
+  const gy = Y(-(m.reveal || 0));
+  g += L(X(-w / 2), gy, X(w / 2), gy, { stroke: 'var(--glass)', w: 2.2 });
+  g += T(cx, Y(-wt) - 6, 'w ' + m2(w), { size: 8.5, anchor: 'middle', fill: 'var(--ink2)' }) + T(W - 6, H - 6, 'outside ↓', { size: 8, anchor: 'end', fill: 'var(--ink3)' });
+  const tpx = Math.max(2, DRAWN_T * k);
+  for (let jj = 0; jj < n; jj++) {
+    const fu = j0 + dir * jj * step;
+    g += RECT(X(fu) - tpx / 2, Y(0), tpx, P * k, { fill: 'var(--sun)' });
+    if (cut) g += T(X(fu), Y(P) + 12, '…', { size: 10, anchor: 'middle', fill: 'var(--sun)' });
+    // the ray at γ from the far side of the gap, at the glass, past the fin's tip
+    const ox = X(fu + dir * step), run = (Y(P) - gy) + 30;
+    g += L(ox, gy, ox - dir * run * tg, gy + run, { stroke: 'var(--sun)', w: 1, dash: '4 3' });
   }
-  g += T(fin0 + (right ? 6 : -6), yW + P * k / 2, (n === 1 ? 'Pd ' : 'd ') + (cut ? '≥ ' : '') + m2(d), { size: 8.5, anchor: right ? 'start' : 'end', fill: 'var(--sun)' });
-  if (n > 1) g += T(fin0 + dir * step / 2, yW - 9, 's ' + m2(w / n), { size: 8, anchor: 'middle', fill: 'var(--ink2)' });
-  g += T(cx, yW + P * k + 24, 'γ ' + deg(Math.abs(gam)), { size: 8.5, anchor: 'middle', fill: 'var(--sun)' });
-  return svgOf(W, H, g, 'Plan: ' + (n === 1 ? 'a fin at the jamb' : n + ' fins') + ' deep enough to shade the whole window width at this instant');
+  g += T(X(j0) + (right ? 6 : -6), Y(P / 2), (n === 1 ? 'Pd ' : 'd ') + (cut ? '≥ ' : '') + m2(d), { size: 8.5, anchor: right ? 'start' : 'end', fill: 'var(--sun)' });
+  if (n > 1) g += T(X(j0 + dir * step / 2), Y(-wt) - 6, 's ' + m2(step), { size: 8, anchor: 'middle', fill: 'var(--ink2)' });
+  g += T(cx, Math.min(H - 18, Y(P) + 24), 'γ ' + deg(Math.abs(gam)), { size: 8.5, anchor: 'middle', fill: 'var(--sun)' });
+  return svgOf(W, H, RECDEFS + g, 'Plan: ' + (n === 1 ? 'a fin at the jamb' : n + ' fins') + ' deep enough to shade the whole window width at this instant, drawn to the window as built');
 }
-/** the ideal on one axis, as a shading system would be made from it: { dir, n, d, pitch, ext, side, name } */
-export function idealSpec(F, dir) {
+/** upright members standing on the head, out from the facade: across the overhang's projection, n at its nth, each as tall as the sun climbs across one */
+export function cSolution(m, th, n) {
+  const tT = Math.tan(th * D2R), Ph = m.winH / tT, s = Ph / n;
+  return { n, pitch: s, d: s * tT, Ph, up: true };
+}
+/** the ideal of one kind, as a device would be made from it: { dir, n, d, pitch, ext, side, out, name }; null where there is no solution */
+export function idealSpec(F, kind) {
   const { m, cur } = F;
   if (!m.opening || !cur.onFacade) return null;
   const gam = wrap180(cur.gf - cur.az), tg = Math.tan(Math.abs(gam) * D2R), tT = Math.tan(cur.vsa * D2R);
-  const when = MONTHS[F.date.m - 1] + ' ' + F.date.d + ' ' + hhmm(F.S.hour);
-  if (dir === 'h') {
+  const when = MONTHS[F.date.m - 1] + ' ' + F.date.d + ', ' + hhmm(F.S.hour);
+  if (kind === 'h') {
     const s = hSolution(m, cur.vsa, recUI.nh);
+    if (!(s.Ph <= IDEAL_MAX)) return null;
     // the sun slips along a blade by d tan |γ| across its depth: the blade runs that far past each jamb
-    return { dir, n: s.n, d: s.d, pitch: s.pitch, ext: Math.min(12, 2 * s.d * tg), name: (s.n === 1 ? 'Ideal overhang' : 'Ideal ' + s.n + ' louvres') + ', ' + when };
+    return { dir: 'h', n: s.n, d: s.d, pitch: s.pitch, ext: Math.min(12, 2 * s.d * tg), name: 'Ideal solution - ' + when };
   }
-  if (tg <= 1e-3) return null;
+  if (kind === 'c') {
+    const s = cSolution(m, cur.vsa, recUI.nc);
+    if (!(s.Ph <= IDEAL_MAX)) return null;
+    return { dir: 'h', out: true, n: s.n, d: s.d, pitch: s.pitch, Ph: s.Ph, ext: Math.min(12, 2 * s.Ph * tg), name: 'Ideal solution - ' + when };
+  }
+  if (tg <= 1e-3 || m.winW / tg > IDEAL_MAX) return null;
   const n = recUI.nv, pitch = m.winW / n, d = pitch / tg;
   // and up a fin by d tan θ: the fin runs that far above the head
-  return { dir, n, d, pitch, ext: Math.min(12, d * tT), side: gam > 0 ? 'end' : 'start', name: (n === 1 ? 'Ideal fin' : 'Ideal ' + n + ' fins') + ', ' + when };
+  return { dir: 'v', n, d, pitch, ext: Math.min(12, d * tT), side: gam > 0 ? 'end' : 'start', name: 'Ideal solution - ' + when };
 }
-const useBtn = dir => `<button type="button" class="minibtn idealuse" data-ideal="${dir}" title="Make these ideal members a shading system type of their own: name it, and it goes on the selected window. It shades the whole glass at this instant only.">Use on this window</button>`;
+/** the ideal kept on the window and to the moment: on, the window carries it, remade as the date and time change */
+const liveBtn = (dir, on) => `<button type="button" class="minibtn idlive${on ? ' on' : ''}" data-live="${dir}" aria-pressed="${on}" title="Live optimization: the window carries these ideal members, remade for every date and time you set or play through - its own shading set aside while it is on. Turn it off here, or from any view.">${on ? 'Live ●' : 'Live link'}</button>`;
+const useBtn = dir => `<button type="button" class="minibtn idealuse" data-ideal="${dir}" title="Put these ideal members on the selected window as a device of their own, named - it joins the library's devices. It shades the whole glass at this instant only.">Use on this window</button>`;
 const MEMBERS_TIP = 'One member as deep as the window needs, or the same cut-off from n members, each 1/n as deep at 1/n the spacing. Try different numbers here: it does not change the design.';
+const noSolution = why => `<p class="calcnote nosol"><b>No solution</b> at this instant: ${why}</p>`;
 export function recGeometry(F) {
   const { m, cur } = F;
   if (!m.opening) return '<p class="calcnote">The selected storey has no glazing on this side.</p>';
   if (!cur.onFacade) return '<p class="calcnote">The sun is ' + (cur.up ? 'behind this facade' : 'down') + ' at ' + whenOf(F) + ': nothing is needed to shade this window now.</p>';
   const h = m.winH, w = m.winW, th = cur.vsa, tT = Math.tan(th * D2R), gam = wrap180(cur.gf - cur.az), tg = Math.tan(Math.abs(gam) * D2R);
-  const hs = hSolution(m, th, recUI.nh), nv = recUI.nv, Pd = tg > 1e-3 ? w / tg : Infinity, sv = w / nv, dv = Pd / nv;
-  const head = '<p class="recnote" data-part="note"><b>Ideal solutions</b>, not the shading as built: the hand method’s simplest devices - flush, long and thin - that would shade the whole of this window at ' + whenOf(F) + '. There are many other ways. Use one on the window to test it in the drawings and the results.</p>';
+  const hs = hSolution(m, th, recUI.nh), nv = recUI.nv, Pd = tg > 1e-3 ? w / tg : Infinity, sv = w / nv, dv = Pd / nv, cs = cSolution(m, th, recUI.nc);
+  const L = F.S.live, here = L && L.f === F.sel.f && L.st === F.sel.st;
+  const hOk = hs.Ph <= IDEAL_MAX, vOk = Pd <= IDEAL_MAX, cOk = cs.Ph <= IDEAL_MAX;
+  const head = '<p class="recnote" data-part="note"><b>Ideal solutions</b>, not the shading as built: the hand method’s simplest devices - flush, long and thin - that would shade the whole of this window at ' + whenOf(F) + '. There are many other ways. Live optimization, in any 3D view, plan or section, puts them on the window and keeps them to the date and time.</p>';
   const hFig = hs.n === 1
     ? fig('Ph', 'Overhang at the head', m2(hs.d), 'shades the whole ' + m2(h) + ' height now', eq('Ph = h / tan θ = ' + fmt(h, 2) + ' / ' + fmt(tT, 3) + ' = ' + m2(hs.d)))
     : fig('Ph', hs.n + ' louvres at ' + mm(hs.pitch), 'depth ' + mm(hs.d), 'each shades the gap below it, the top one at the head',
       eq('spacing s = h / n = ' + fmt(h, 2) + ' / ' + hs.n + ' = ' + mm(hs.pitch)) + eq('depth = s / tan θ = ' + fmt(hs.pitch * 1000, 0) + ' / ' + fmt(tT, 3) + ' = ' + mm(hs.d))
         + eq('one overhang would be Ph = h / tan θ = ' + m2(hs.Ph) + ': each of the ' + hs.n + ' is 1/' + hs.n + ' of it'));
-  const vFig = !isFinite(Pd) ? '' : nv === 1
+  const vFig = !vOk ? '' : nv === 1
     ? fig('Pd', 'Fin at the ' + (gam > 0 ? 'right' : 'left') + ' jamb', m2(Pd), 'shades the whole ' + m2(w) + ' width now', eq('Pd = w / tan |γ| = ' + fmt(w, 2) + ' / ' + fmt(tg, 3) + ' = ' + m2(Pd)))
     : fig('Pd', nv + ' fins at ' + mm(sv), 'depth ' + mm(dv), 'each shades the gap beside it, the first at the ' + (gam > 0 ? 'right' : 'left') + ' jamb',
       eq('spacing s = w / n = ' + fmt(w, 2) + ' / ' + nv + ' = ' + mm(sv)) + eq('depth = s / tan |γ| = ' + fmt(sv * 1000, 0) + ' / ' + fmt(tg, 3) + ' = ' + mm(dv))
         + eq('one fin would be Pd = w / tan |γ| = ' + m2(Pd) + ': each of the ' + nv + ' is 1/' + nv + ' of it'));
-  const sec = `<div class="reccard ideal"><div class="rechd"><h4 data-part="hh"><span class="idealtag">Ideal</span> Horizontal: against the profile angle θ ${deg(th)}</h4>${members('nh', hs.n, MEMBERS_TIP)}${useBtn('h')}</div>
-    <div data-part="hb">${sectionDiagram(h, m.sill, hs, th)}${figs(hFig)}</div></div>`;
-  const pln = `<div class="reccard ideal"><div class="rechd"><h4 data-part="vh"><span class="idealtag">Ideal</span> Vertical: against γ ${deg(Math.abs(gam))}</h4>${members('nv', nv, MEMBERS_TIP)}${isFinite(Pd) ? useBtn('v') : ''}</div>
-    <div data-part="vb">${isFinite(Pd) ? planDiagram(w, Pd, gam, nv) + figs(vFig) : '<p class="calcnote">The sun is square to the facade: a fin cannot shade it now - horizontal elements can.</p>'}</div></div>`;
-  return head + `<div class="recgrid">${sec}${pln}</div>`;
+  const cFig = fig('Pc', cs.n + ' upright members at ' + mm(cs.pitch), 'height ' + mm(cs.d), 'standing on the head, out to the overhang’s projection',
+    eq('projection Ph = h / tan θ = ' + fmt(h, 2) + ' / ' + fmt(tT, 3) + ' = ' + m2(cs.Ph)) + eq('spacing s = Ph / n = ' + m2(cs.Ph) + ' / ' + cs.n + ' = ' + mm(cs.pitch))
+      + eq('height = s · tan θ = h / n = ' + mm(cs.d)));
+  const far = (what, x) => noSolution(what + ' would have to project ' + m2(x) + ' - more than ' + IDEAL_MAX + ' m. The sun is too low against this facade for it.');
+  const card = (key, title, sub, n, dir, ok, body) => `<div class="reccard ideal"><div class="rechd"><h4 data-part="${key}h"><span class="idealtag">Ideal</span> ${title} <span class="recsub">${sub}</span></h4>${members('n' + dir, n, MEMBERS_TIP)}${ok && here && L[dir] ? '<span class="idlive on">Live</span>' : ''}</div>
+    <div data-part="${key}b">${body}</div></div>`;
+  const sec = card('h', 'Horizontal', 'θ ' + deg(th), hs.n, 'h', hOk, hOk ? sectionDiagram(m, hs, th) + figs(hFig) : far('An overhang', hs.Ph));
+  const pln = card('v', 'Vertical', 'γ ' + deg(Math.abs(gam)), nv, 'v', vOk, vOk ? planDiagram(m, Pd, gam, nv) + figs(vFig)
+    : isFinite(Pd) ? far('A fin', Pd) : noSolution('the sun is square to the facade, so a fin cannot shade it - horizontal members can.'));
+  const out = card('c', 'Louvred canopy', 'upright members, out from the facade · θ ' + deg(th), cs.n, 'c', cOk, cOk ? sectionDiagram(m, cs, th) + figs(cFig) : far('The members', cs.Ph));
+  return head + `<div class="recgrid">${sec}${pln}${out}</div>`;
 }
 
 /* ---------- what the by-law allows a device here to project ---------- */

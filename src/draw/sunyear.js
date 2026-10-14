@@ -89,12 +89,13 @@ export function drawSunYear(F, Hh) {
   }
   const line = pts => pts.map((p, k) => (k ? 'L' : 'M') + fmt(p[0], 1) + ',' + fmt(p[1], 1)).join(' ');
   g += PATH(line(rise), { stroke: 'var(--ink2)', w: 1 }) + PATH(line(set), { stroke: 'var(--ink2)', w: 1 });
-  for (let h = 0; h <= 24; h += 3) {
-    g += L(X0, py(h), X1, py(h), { stroke: 'var(--rule2)', w: h % 6 ? .3 : .6, op: .8 });
-    if (h % 6 === 0) g += T(X0 - 5, py(h) + 3, String(h).padStart(2, '0') + ':00', { anchor: 'end', size: 7.5, fill: 'var(--ink3)' });
+  // the grid: a line every hour - every third heavier, and named - and one at the start of every month
+  for (let h = 0; h <= 24; h++) {
+    g += L(X0, py(h), X1, py(h), { stroke: 'var(--ink3)', w: h % 3 ? .3 : .6, op: h % 3 ? .22 : .45 });
+    if (h % 3 === 0) g += T(X0 - 5, py(h) + 3, String(h).padStart(2, '0') + ':00', { anchor: 'end', size: 7.5, fill: 'var(--ink3)' });
   }
   [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335].forEach((d, mo) => {
-    g += L(px(d), Y1, px(d), Y1 + 4, { stroke: 'var(--ink3)', w: .6 });
+    g += L(px(d), Y0, px(d), Y1 + 4, { stroke: 'var(--ink3)', w: .5, op: .4 });
     g += T(px(d) + 2, Y1 + 13, MONTHS[mo].slice(0, 3), { size: 8, fill: 'var(--ink3)' });
   });
   g += RECT(X0, Y0, X1 - X0, Y1 - Y0, { fill: 'none', stroke: 'var(--ink2)', 'stroke-width': 1 });

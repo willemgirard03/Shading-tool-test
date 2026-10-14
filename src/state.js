@@ -27,7 +27,7 @@ import { clamp, doyOf, wrap180, wrap360, D2R } from './util.js';
 import { GLAZING0, unitLayout, brokenUnits, buildCell, SLAB0 } from './geometry/cell.js';
 import { DEVICE0, array0, arrayLen0, deviceFromV4, deviceName, lenFromWindow, memberLen, buildDevice, reachBack, HINGE_F, arrayOn, arraySpan } from './geometry/device.js';
 import { arrayAnchor } from './geometry/arrays.js';
-import { site0, SITE_KINDS, SITE_FIELDS, isStreet, siteFrame, CTX_FIELDS } from './geometry/site.js';
+import { site0, SITE_KINDS, SITE_FIELDS, SITE_PRESETS, isStreet, siteFrame, CTX_FIELDS } from './geometry/site.js';
 import { lib0, addEntry, duplicateEntry, nextName, entryName, newUnit, newSystem, flatGlazing, layoutGlazing, adoptGlazing, usage, SYSTEM_KEYS, SHGC_MAX } from './library.js';
 import { arrayPositions } from './geometry/arrays.js';
 import { solarPosition } from './solar.js';
@@ -138,6 +138,9 @@ export function getValue(k, st = S) {
       return rest === 'sillK' ? u.sill : u.fillH ? ceilingOf(st) : Math.min(u.sill + u.winH, ceilingOf(st));
     }
     if (rest === 'arrN' || rest === 'arrSp') { const lay = r && layoutGlazing(st, r); if (!lay) return undefined; const L = unitLayout(lay, facadeLength(st, st.sel.f, st.sel.st)); return rest === 'arrN' ? L.n : L.pitch; }
+    // the windows an array, or one window alone; and whether the array is set out by number or by spacing
+    if (rest === 'arrOn') { const y = selSystem(st); return !!y && !(y.winBy === 'number' && y.winN <= 1); }
+    if (rest === 'arrBy') { const y = selSystem(st); return y ? y.winBy : undefined; }
     if (SYSTEM_KEYS.includes(rest)) { const y = selSystem(st); return y ? y[rest] : undefined; }
     const u = selUnitType(st); return u ? u[rest] : undefined;
   }
@@ -153,6 +156,7 @@ export function getValue(k, st = S) {
     // the context building being edited - its distance to the building worked out - and the size the next one is added at
     if (f === 'k') { const c = selContext(st); return !c ? undefined : fld === 'gap' ? contextGap(st, c).d : c[fld]; }
     if (f === 'draft') return (sg.draft || CTX_DRAFT0())[fld];
+    if (fld === 'curb2') return sg[f] ? sg[f].curb2 ?? sg[f].curb : undefined;
     return sg[f] ? sg[f][fld] : undefined;
   }
   if (head === 'a' && (rest === 'arrN' || rest === 'arrSp')) { const f = arrayFigures(selDevice(st)); return f ? (rest === 'arrN' ? f.n : f.sp) : undefined; }
@@ -247,6 +251,20 @@ function setOne(k, v, st) {
       else u.winH = clamp(v, 0.2, Math.max(0.2, ceil - u.sill));
       return;
     }
+    // the windows made an array - at a spacing that leaves wall between them - or one window again
+    if (rest === 'arrOn') {
+      const y = selSystem(st), u = selUnitType(st); if (!y) return;
+      if (v) { y.winBy = 'spacing'; y.winSp = +Math.max(3, (u ? u.winW : 1.5) + 1.2).toFixed(3); }
+      else { y.winBy = 'number'; y.winN = 1; }
+      return;
+    }
+    // the array set out by number or by spacing, keeping what it has
+    if (rest === 'arrBy') {
+      const y = selSystem(st); if (!y || (v !== 'number' && v !== 'spacing') || y.winBy === v) return;
+      const n = getValue('g.arrN', st), sp = getValue('g.arrSp', st);
+      y.winBy = v; if (v === 'number') y.winN = n; else y.winSp = +sp.toFixed(3);
+      return;
+    }
     // the window array set on its bracket: a number of windows, or their spacing - the way it is set out follows
     if (rest === 'arrN' || rest === 'arrSp') {
       const y = selSystem(st); if (!y) return;
@@ -298,7 +316,7 @@ function setOne(k, v, st) {
     if (!sg[f]) return;
     if (fld === 'kind') { if (SITE_KINDS[v]) { sg[f].kind = v; if (v === 'lane' && sg[f].width > 12) { sg[f].width = 6; sg[f].curb = 0; } if (v === 'street' && sg[f].width < 10) { sg[f].width = 20; sg[f].curb = 3; } } return; }
     const r = SITE_FIELDS[fld];
-    if (r) sg[f][fld] = clamp(v, r[0], fld === 'curb' ? Math.min(r[1], sg[f].width) : r[1]);
+    if (r) sg[f][fld] = clamp(v, r[0], fld === 'curb' || fld === 'curb2' ? Math.min(r[1], sg[f].width) : r[1]);
     return;
   }
   // a shading array set on its bracket: a number of members, or their spacing - the way it is set out follows
@@ -571,6 +589,7 @@ export function plateTo(st, o) {
   const set = (f, x) => { const [, lo, hi] = Object.values(STOREY_KEYS).find(s => s[0] === f); for (let i = i0; i <= i1; i++) st.storeys[i][f] = f === 'rot' ? wrap180(x) : clamp(x, lo, hi); };
   if (o.w !== undefined) set('w', o.w);
   if (o.d !== undefined) set('d', o.d);
+  if (o.h !== undefined) set('h', o.h);
   if (o.a !== undefined) set('rot', o.a - (storeyRot(st, i0) - (p.rot || 0)));
   const r = (st.rot || 0) * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
   const placeAt = (i, C) => { const q = st.storeys[i]; q.oxyIn = 'building'; q.ox = C[0] * c - C[1] * s; q.oy = C[0] * s + C[1] * c; };
@@ -587,6 +606,20 @@ export function plateTo(st, o) {
   } else if (o.C) {
     for (let i = i0; i <= i1; i++) placeAt(i, o.C);
   }
+  return true;
+}
+/** a site to start from; the context massing and the side being set are kept */
+export function applySitePreset(key, st = S) {
+  const p = SITE_PRESETS[key];
+  if (!p) return false;
+  const sg = siteOf(st);
+  Object.assign(sg, p.make());
+  return true;
+}
+/** every side's condition handed on to the next side round, clockwise: north's to east, east's to south... */
+export function rotateSite(st = S) {
+  const sg = siteOf(st), o = { N: sg.N, E: sg.E, S: sg.S, W: sg.W };
+  sg.E = o.N; sg.S = o.E; sg.W = o.S; sg.N = o.W;
   return true;
 }
 /** the storeys above take the selected one's height, floorplate, north offset and offset */
@@ -617,6 +650,15 @@ export function duplicateStorey(st = S, where = 'above') {
   // saved windows stay on the storeys they were saved on
   for (const v of st.views || []) if (v.st >= at) v.st++;
   st.sel.st = at;
+  return true;
+}
+/** a blank storey - no glazing - the size of the selected one, put directly above it or directly below; it becomes the selected storey */
+export function insertStorey(where = 'above', st = S) {
+  if (st.storeys.length >= STOREYS_MAX) return false;
+  const p = selStorey(st), at = st.sel.st + (where === 'below' ? 0 : 1);
+  st.storeys.splice(at, 0, storey0(p.h, p.w, p.d, p.ox || 0, p.oy || 0, p.rot || 0, p.oxyIn || 'own', p.rotRel || 'building', p.slab ?? SLAB0));
+  for (const v of st.views || []) if (v.st >= at) v.st++;
+  st.sel.st = at; st.sel.unit = null;
   return true;
 }
 /** the selected storey moved a level up (+1) or down (-1), trading places */
@@ -655,6 +697,7 @@ export function matchAbove(st = S) {
   if (!targets.length) return { done: [], skipped: [] };
   return copyCondition({ height: false, glazing: true, whole: true }, targets, st);
 }
+
 
 /* ---------- breaking a window from its array, and binding it back ----------
    The window and its shading break out apart. Broken, the window takes a copy
@@ -721,11 +764,11 @@ export function rebindAll(st = S, part = 'win') {
 }
 /** the other windows of the selected array broken from it in that part */
 export const otherBroken = (st = S, part = 'win') => brokenUnits(selCell(st), part).filter(i => i !== selUnitIndex(st));
-/** copies that breaking made and nothing uses any more, dropped from the library */
-function prune(st) {
-  for (const kind of ['units', 'shading', 'devices']) {
+/** what nothing in the design uses any more, dropped: what the user keeps is saved apart */
+export function prune(st = S) {
+  for (const kind of ['systems', 'units', 'shading', 'devices']) {
     const used = usage(st);
-    for (const [id, o] of Object.entries(st.lib[kind])) if (o.auto && !used[id]) delete st.lib[kind][id];
+    for (const id of Object.keys(st.lib[kind])) if (!used[id] && st.lib[kind][id].auto) delete st.lib[kind][id];
   }
 }
 
@@ -773,6 +816,14 @@ export function deleteEntry(kind, id, st = S) {
   delete st.lib[kind][id];
   return true;
 }
+/** a window in the middle of each side of the selected storey, each its own system so each side changes alone */
+export function windowEachSide(st = S) {
+  const f0 = st.sel.f;
+  // each named for its side
+  for (const f of Object.keys(FACADES)) { st.sel.f = f; if (addWindow(st)) { const y = st.lib.systems[selStorey(st).cells[f].sys]; if (y) { y.name = f + ' window'; y.auto = false; const u = st.lib.units[y.unit]; if (u) { u.name = f + ' window'; u.auto = false; } } } }
+  st.sel.f = f0; st.sel.unit = null;
+  return true;
+}
 /** the glazing as the worked cases and the tests first give it: four 3 m windows by number */
 export const addGlazing = andAbove(function addGlazing(st = S) {
   const s = selStorey(st);
@@ -782,6 +833,18 @@ export const addGlazing = andAbove(function addGlazing(st = S) {
   // a window has to fit under the slab of the storey it is put in
   if (g.sill + g.winH > top) g.winH = Math.max(0.6, top - g.sill);
   s.cells[st.sel.f] = adoptGlazing(st, g, nextName(st, 'systems', 'Punched windows')).ref;
+  st.sel.unit = null;
+  return true;
+});
+/** one window on the selected side, in the middle of it - an array is made of it from its window */
+export const addWindow = andAbove(function addWindow(st = S) {
+  const s = selStorey(st);
+  if (s.cells[st.sel.f]) return false;
+  const g = GLAZING0(), top = s.h - (s.slab ?? SLAB0);
+  Object.assign(g, { winW: 1.5, winH: 1.8, winBy: 'number', winN: 1 });
+  g.shgc = Math.min(g.shgc, SHGC_MAX);
+  if (g.sill + g.winH > top) g.winH = Math.max(0.6, top - g.sill);
+  s.cells[st.sel.f] = adoptGlazing(st, g, nextName(st, 'systems', 'Window')).ref;
   st.sel.unit = null;
   return true;
 });
@@ -796,7 +859,7 @@ export const DEVICES_MAX = 4;
 /** a shading system for the selected window, making one if it has none */
 function shadingHere(st) {
   let h = selShading(st);
-  if (!h) { const id = addEntry(st, 'shading', { name: nextName(st, 'shading', 'Shading') }); setOne('g.shd', id, st); h = st.lib.shading[id]; }
+  if (!h) { const id = addEntry(st, 'shading', { name: nextName(st, 'shading', 'Shading group') }); setOne('g.shd', id, st); h = st.lib.shading[id]; }
   return h;
 }
 /** a new member, horizontal or vertical, on the selected window's shading system */
@@ -875,6 +938,100 @@ export const applyShadingPreset = andAbove(function applyShadingPreset(name, st 
   const devs = p ? p.make(o, run, selStorey(st).h) : [];
   const id = addEntry(st, 'shading', { name: nextName(st, 'shading', p ? p.label : 'Shading'), devices: devs.map(D => addEntry(st, 'devices', D)) });
   setOne('g.shd', id, st);
+  return true;
+});
+
+/* ---------- the library: what the user saves, linked wherever it is used ----------
+   A shading device, a shading group - the devices a window carries - and a
+   window group - a side's window system and its glass - can each be saved to
+   the library under the name it already has. Saved, it is offered wherever
+   such a thing can be added; added, it is the same thing, linked: an edit to
+   it anywhere is an edit everywhere it is used, and the library keeps it as it
+   now is. A copy, named apart, is the way to change one use alone. */
+const KIND_OF = { device: 'devices', group: 'shading', window: 'systems' };
+function entryHere(kind, st) { return kind === 'device' ? selDevice(st) : kind === 'group' ? selShading(st) : kind === 'window' ? selSystem(st) : null; }
+/** is the selected device, group or window group in the library */
+export const isSaved = (kind, st = S) => { const e = entryHere(kind, st); return !!(e && e.saved); };
+/** the name a copy is offered: "Name - Copy 01", the first number free */
+export function copyName(kind, st = S) {
+  const e = entryHere(kind, st);
+  if (!e) return '';
+  const lk = KIND_OF[kind], base = String(e.name || defaultName(lk, e)).replace(/ - Copy \d+$/, ''), taken = new Set(Object.values(st.lib[lk]).map(o => o.name));
+  for (let n = 1; ; n++) { const t = base + ' - Copy ' + String(n).padStart(2, '0'); if (!taken.has(t)) return t; }
+}
+/** every use of one entry made a use of another */
+function repoint(st, lk, from, to) {
+  for (const s of st.storeys) for (const r of Object.values(s.cells)) {
+    if (!r || r.sys === undefined) continue;
+    if (lk === 'systems' && r.sys === from) r.sys = to;
+    if (lk === 'shading') { if (r.shd === from) r.shd = to; for (const b of Object.values(r.brokenShd || {})) if (b.shd === from) b.shd = to; }
+  }
+  if (lk === 'devices') for (const h of Object.values(st.lib.shading)) h.devices = h.devices.map(d => d === from ? to : d);
+}
+/** the selected device, group or window group saved under its name; one saved under that name before gives way to it, its uses taking this one */
+export function saveEntry(kind, st = S) {
+  const e = entryHere(kind, st), lk = KIND_OF[kind];
+  if (!e) return false;
+  for (const o of Object.values(st.lib[lk])) if (o !== e && o.saved && o.name === e.name) { repoint(st, lk, o.id, e.id); delete st.lib[lk][o.id]; }
+  e.saved = true; e.auto = false;
+  return true;
+}
+/** taken out of the library: still used where it is, but no longer offered */
+export function deleteSaved(lk, id, st = S) {
+  const o = st.lib[lk] && st.lib[lk][id];
+  if (!o) return false;
+  o.saved = false; prune(st);
+  return true;
+}
+/** a copy of the selected device, group or window group, under a name of its own, used here in its place */
+export const copyEntry = andAbove(function copyEntry(kind, name, st = S) {
+  const r = selCell(st), e = entryHere(kind, st);
+  if (!r || !e || !name) return false;
+  if (kind === 'device') {
+    const h = selShading(st);
+    h.devices[clamp(r.dev || 0, 0, h.devices.length - 1)] = duplicateEntry(st, 'devices', e.id, name);
+  } else if (kind === 'group') {
+    const nid = duplicateEntry(st, 'shading', e.id, name), b = r.brokenShd && r.brokenShd[selUnitIndex(st)];
+    if (b) b.shd = nid; else r.shd = nid;
+  } else {
+    const nid = duplicateEntry(st, 'systems', e.id, name), y = st.lib.systems[nid];
+    if (st.lib.units[y.unit]) y.unit = duplicateEntry(st, 'units', y.unit, st.lib.units[y.unit].name);
+    r.sys = nid;
+  }
+  return true;
+});
+/** a saved window group on the selected side, linked */
+export const addSavedWindow = andAbove(function addSavedWindow(id, st = S) {
+  if (!st.lib.systems[id]) return false;
+  useSystemOn(st, id);
+  return true;
+});
+/** shading added to the selected window: new devices, a preset's, a saved device
+ *  (linked), or a saved shading group - linked as a whole where the window has
+ *  none yet, its devices linked one by one where it has */
+export const addShading = andAbove(function addShading(what, st = S) {
+  const r = selCell(st), g = selGlazing(st);
+  if (!r || !g) return false;
+  const k = String(what).slice(0, String(what).indexOf(':')), id = String(what).slice(String(what).indexOf(':') + 1);
+  let devs = [], ids = [];
+  if (k === 'new') devs = [DEVICE0(id === 'v' ? 'v' : 'h')];
+  else if (k === 'pre' && SHADING_PRESETS[id]) {
+    const o = openingOf(st), run = o.u1 - o.u0 >= unitLayout(g, facadeLength(st, st.sel.f, st.sel.st)).pitch - 1e-9;
+    devs = SHADING_PRESETS[id].make(o, run, selStorey(st).h);
+  }
+  else if (k === 'dev' && st.lib.devices[id]) ids = [id];
+  else if (k === 'grp' && st.lib.shading[id]) {
+    const h0 = selShading(st);
+    if (!h0 || !h0.devices.length) { setOne('g.shd', id, st); r.dev = 0; return true; }
+    ids = st.lib.shading[id].devices.slice();
+  }
+  if (!devs.length && !ids.length) return false;
+  const h = shadingHere(st);
+  if (h.devices.length + devs.length + ids.length > DEVICES_MAX) return false;
+  const first = h.devices.length;
+  for (const D of devs) h.devices.push(addEntry(st, 'devices', D));
+  for (const d of ids) h.devices.push(d);
+  r.dev = first;
   return true;
 });
 
@@ -1044,13 +1201,99 @@ export function contextFrame(st, mode) {
    Blades hang from the head, down the window at the pitch; fins stand from the
    jamb the sun comes from (side), across it, from the sill up.             */
 export const IDEAL_THICK = 0.02;
-export const shadingFromIdeal = andAbove(function shadingFromIdeal(spec, name, st = S) {
-  if (!selGlazing(st) || !selCell(st) || !(spec && spec.d > 0 && spec.n >= 1)) return false;
+/** the ideal members as one device: blades from the head, or fins from the jamb the sun comes from */
+export function idealDevice(spec) {
   const r4 = x => +x.toFixed(4), h = spec.dir === 'h', n = Math.round(spec.n);
+  // upright members standing on the head, out from the facade: the first one spacing off the wall, the rest stepping out
+  if (spec.out) {
+    const D = Object.assign(DEVICE0('h'), { name: 'Upright members', depth: r4(spec.d), thick: IDEAL_THICK, angle: -90, hinge: 'start',
+      justV: 'start', justU: 'centre', offset: r4(spec.pitch), lenRel: true, len: r4(Math.max(0, spec.ext || 0)) });
+    if (n > 1) D.arr = { along: 'out', mode: 'count', count: n, spacing: r4(spec.pitch), len: r4((n - 1) * spec.pitch), ends: true };
+    return D;
+  }
   const D = Object.assign(DEVICE0(h ? 'h' : 'v'), { name: h ? (n === 1 ? 'Overhang' : 'Horizontal louvres') : (n === 1 ? 'Fin' : 'Vertical fins'),
     depth: r4(spec.d), thick: IDEAL_THICK, lenRel: true, len: r4(Math.max(0, spec.ext || 0)) },
     h ? { justV: 'start', justU: 'centre' } : { justU: spec.side === 'end' ? 'end' : 'start', justV: 'end' });
   if (n > 1) D.arr = { along: 'facade', mode: 'count', count: n, spacing: r4(spec.pitch), len: r4((n - 1) * spec.pitch), ends: true };
+  return D;
+}
+/* Live optimization: the recommendations' ideal put on a window and kept to
+   the moment set. While it is on, the window carries the ideal members -
+   horizontal, vertical or both - remade as the date and the time change, in a
+   shading group of their own in place of what it carried; turned off, the last
+   of them stays, as ordinary shading. It stays with the window it was turned
+   on for: turned on for another, it moves there. */
+export function liveToggle(dir, st = S) {
+  const r = selCell(st);
+  if (!r || !selGlazing(st)) return false;
+  const L = st.live, here = L && L.f === st.sel.f && L.st === st.sel.st;
+  if (L && !here) liveOff('keep', st);
+  if (!st.live) {
+    // what the window carried, kept, so that turning the optimization off can put it back
+    const prev = selShadingId(st) || null;
+    const id = addEntry(st, 'shading', { name: nextName(st, 'shading', 'Optimized shading'), devices: [], auto: true });
+    setOne('g.shd', id, st);
+    st.live = { f: st.sel.f, st: st.sel.st, unit: st.sel.unit, shd: id, prev, h: false, v: false, c: false, dev: {} };
+    matchAbove(st);
+  }
+  st.live[dir] = !st.live[dir];
+  if (!st.live.h && !st.live.v && !st.live.c) liveOff('keep', st);
+  return true;
+}
+/** what the optimization puts on the window: 'h' horizontal, 'v' vertical, 'hv' both, 'c' a louvred canopy of upright members */
+export function liveSetKind(kind, st = S) {
+  const L = st.live;
+  if (!L || !['h', 'v', 'hv', 'c'].includes(kind)) return false;
+  L.h = kind === 'h' || kind === 'hv'; L.v = kind === 'v' || kind === 'hv'; L.c = kind === 'c';
+  return true;
+}
+export const liveKind = L => L ? (L.c ? 'c' : L.h && L.v ? 'hv' : L.v ? 'v' : 'h') : null;
+/** the optimization turned off: 'revert' puts back what the window carried before; 'keep' leaves the last of it as ordinary shading, under the name given */
+export function liveOff(mode = 'keep', st = S, name = null) {
+  const L = st.live;
+  if (!L) return false;
+  st.live = null;
+  if (mode === 'revert') {
+    const sel0 = st.sel;
+    st.sel = { f: L.f, st: L.st, unit: L.unit };
+    setOne('g.shd', L.prev && st.lib.shading[L.prev] ? L.prev : '', st);
+    matchAbove(st);
+    st.sel = sel0;
+  } else {
+    const h = st.lib.shading[L.shd];
+    if (h) {
+      h.auto = false;
+      if (name) h.name = nextName(st, 'shading', name);
+      h.devices.forEach(d => {
+        const D = st.lib.devices[d];
+        if (!D) return;
+        D.auto = false;
+        if (name) D.name = nextName(st, 'devices', h.devices.length > 1 ? name + (D.dir === 'v' ? ' - vertical' : ' - horizontal') : name);
+      });
+    }
+  }
+  prune(st);
+  return true;
+}
+/** the live members written for the moment: { h, v } specs as the recommendations work them out, null where there is none */
+export function liveApply(specs, st = S) {
+  const L = st.live, h = L && st.lib.shading[L.shd];
+  if (!h) { st.live = null; return false; }
+  const devs = [];
+  for (const dir of ['h', 'v', 'c']) {
+    if (!L[dir] || !specs[dir] || !(specs[dir].d > 0)) continue;
+    const D = Object.assign(idealDevice(specs[dir]), { auto: true });
+    let id = L.dev[dir];
+    if (!id || !st.lib.devices[id]) id = L.dev[dir] = addEntry(st, 'devices', D);
+    else { const keep = st.lib.devices[id]; for (const k of Object.keys(keep)) if (k !== 'id') delete keep[k]; Object.assign(keep, D, { id }); }
+    devs.push(id);
+  }
+  h.devices = devs;
+  return true;
+}
+export const shadingFromIdeal = andAbove(function shadingFromIdeal(spec, name, st = S) {
+  if (!selGlazing(st) || !selCell(st) || !(spec && spec.d > 0 && spec.n >= 1)) return false;
+  const D = idealDevice(spec);
   const nm = String(name || '').trim() || spec.name || 'Ideal shading';
   D.name = nextName(st, 'devices', nm);
   const id = addEntry(st, 'shading', { name: nextName(st, 'shading', nm), devices: [addEntry(st, 'devices', D)] });
@@ -1150,7 +1393,7 @@ const DEMO_SITE = { edit: 'S', S: { kind: 'street', off: 0, width: 20, curb: 3 }
   // across each street, a building that shades it: a 22 m slab across the narrow street, a low block across the wide one
   ctx: [{ id: 'k1', w: 16, d: 30, h: 22, x: 38, y: 0, a: 0 }, { id: 'k2', w: 40, d: 14, h: 9, x: 0, y: -41, a: 0 }], ctxSeq: 2, ctxFrame: 'building', ctxSel: null };
 export const TYPOLOGIES = {
-  blank: { label: 'Blank block', sub: 'one storey, nothing on it', about: 'A single 3.6 m storey on a 30 × 18 m floorplate, with no glazing: build it up yourself.', plnW: 30, plnD: 18, runs: [[1, 3.6, 0.3, null]], st: 0 },
+  blank: { label: 'Default', sub: 'one storey, a window each side', about: 'A single 3.6 m storey on a 30 × 18 m floorplate, a 1.5 × 1.8 m window in the middle of each side and no shading: build it up yourself.', each: true, plnW: 30, plnD: 18, runs: [[1, 3.6, 0.3, null]], st: 0 },
   officeTower: { label: 'Glazed office tower', sub: 'curtain wall · 20 storeys', about: 'A 36 × 30 m office floorplate, 20 storeys: a 6 m lobby and 4 m office floors in curtain wall on a 1.5 m module, glass to glass, under a 1 m slab band, solar-control glass (SHGC 0.28).', plnW: 36, plnD: 30,
     runs: [[1, 6.0, 0.6, ALL(CW_LOBBY)], [19, 4.0, 1.0, ALL(CW_OFFICE)]], st: 9 },
   resTower: { label: 'Glazed residential tower', sub: 'window wall · 30 storeys', about: 'A 24 × 24 m point tower, 30 storeys: a 4.5 m storefront base, then 2.9 m residential floors in window wall, set back 50 mm behind 250 mm slab edges (SHGC 0.33).', plnW: 24, plnD: 24,
@@ -1198,6 +1441,9 @@ export function applyTypology(key, st = S) {
     if (g) for (const gg of [].concat(g)) for (const f of gg.sides) s.cells[f] = refOf(gg.recipe);
     st.storeys.push(s);
   }
+  if (t.each) { st.sel = { f: 'S', st: 0, unit: null }; st.matchAbove.sides = false; windowEachSide(st); }
+  // a building of many storeys starts with its windows and shading carried up its floors
+  st.matchAbove.glazing = st.storeys.length > 1;
   // each side takes the SHGC most of its storeys' glass has
   st.shgc = {};
   for (const f of Object.keys(FACADES)) {

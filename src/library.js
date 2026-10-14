@@ -58,7 +58,8 @@ export function duplicateEntry(st, kind, id, name) {
   const src = st.lib[kind][id];
   if (!src) return null;
   const o = copyOf(src);
-  if (kind === 'shading') o.devices = src.devices.map(d => duplicateEntry(st, 'devices', d)).filter(Boolean);
+  delete o.saved;                                  // a copy is not in the library until it is saved itself
+  if (kind === 'shading') o.devices = src.devices.map(d => duplicateEntry(st, 'devices', d, st.lib.devices[d] && st.lib.devices[d].name)).filter(Boolean);
   const nid = addEntry(st, kind, o);
   st.lib[kind][nid].name = name || nextName(st, kind, src.name || defaultName(kind, src));
   return nid;

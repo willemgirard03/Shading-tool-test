@@ -61,6 +61,29 @@ export function depthStrings(v, devs, m, selD) {
   return s;
 }
 
+/* The members of each array along the facade that this drawing sees on its
+   axis, each with what a drag needs: its place in the array from the end the
+   array starts at, the first and last members, the array's length and how it
+   is set out, and the sheet's run per metre along the axis. Dragged, a member
+   sets the array's spacing - or its number - within the length it has. */
+export function arrayMembers(m, ax, dA, dW) {
+  const out = new Map(), groups = new Map();
+  for (const b of m.own || []) {
+    const D = b.D;
+    // an array along the facade on the axis this drawing sees; one stepping out from the wall in either drawing
+    if (!D || !D.arr || (D.arr.along !== 'out' && (D.dir === 'h' ? 'V' : 'U') !== ax)) continue;
+    if (!groups.has(D)) groups.set(D, []);
+    groups.get(D).push(b);
+  }
+  for (const [D, bs] of groups) {
+    const outw = D.arr.along === 'out', sd = outw ? 1 : ax === 'U' ? 1 : -1, pos = b => +(outw ? b.at : b.anchor).toFixed(6);
+    const an = [...new Set(bs.map(pos))].sort((p, q) => (p - q) * sd), A = arrayOn(D, m.opening);
+    if (an.length < 2 || !A) continue;
+    for (const b of bs) out.set(b, { idx: an.indexOf(pos(b)), a0: pos(b), first: an[0], last: an[an.length - 1], n: an.length, sd, dA: outw ? dW : dA, L: A.len, mode: A.mode });
+  }
+  return out;
+}
+
 export function deviceEdit(v, D, mine, m, grips) {
   const { P, ax, drop } = v, ai = ax === 'U' ? 0 : 1;
   const at0 = P([0, 0]), dA = [P([1, 0])[0] - at0[0], P([1, 0])[1] - at0[1]], dW = [P([0, 1])[0] - at0[0], P([0, 1])[1] - at0[1]];
@@ -107,8 +130,9 @@ export function deviceEdit(v, D, mine, m, grips) {
     const reach = Math.hypot(Tq[0] - H[0], Tq[1] - H[1]), R = Math.max(reach, 14) + 16;
     // the turning arc, beyond the tip, about the hinge - marked where it is
     s += CIRCLE(H[0], H[1], 3, { fill: 'var(--panel)', stroke: COL, 'stroke-width': 1.2 });
-    s += turnArc(H[0], H[1], R, phi - 0.32, phi + 0.32);
-    for (const da of [0, -0.26, 0.26]) grips.push({ p: [H[0] + R * Math.cos(phi + da), H[1] + R * Math.sin(phi + da)], rot: true, pivot: H, key: 'd.angle', from: D.angle, sgn });
+    const half = Math.min(0.32, 12 / R);
+    s += turnArc(H[0], H[1], R, phi - half, phi + half);
+    for (const da of [0, -0.8 * half, 0.8 * half]) grips.push({ p: [H[0] + R * Math.cos(phi + da), H[1] + R * Math.sin(phi + da)], rot: true, pivot: H, key: 'd.angle', from: D.angle, sgn });
     // the angle, dimensioned by an arc from the member laid flat, and typed over
     const r = Math.max(20, Math.min(reach * 0.7, 56)), d0 = phi0, d1 = phi0 + wrapPi(phi - phi0), mid = (d0 + d1) / 2;
     s += L(H[0], H[1], H[0] + (r + 10) * Math.cos(phi0), H[1] + (r + 10) * Math.sin(phi0), { stroke: 'var(--ink3)', w: .6, dash: '3 2' });

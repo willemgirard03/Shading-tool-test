@@ -39,7 +39,13 @@ button{font:inherit}
 .hbtn:not(:disabled):hover{border-color:var(--glass); color:var(--ink)}
 
 /* ---------- shell ---------- */
-.shell{display:grid; grid-template-columns:325px minmax(0,1fr); align-items:start}
+.shell{display:grid; grid-template-columns:minmax(0,1fr); align-items:start}
+/* the panel is empty: everything it held is on the drawings, their bars and small windows, and the settings bar */
+.shell>.rail{display:none}
+.calcbar .libmenu{width:min(360px, 90vw); max-height:60vh; overflow:auto}
+.calcbar .expmenu{width:min(300px, 90vw)}
+.view .axTyp{max-width:13em}
+.view .axSite .ddmenu{display:grid; gap:6px; min-width:15em}
 .rail{
   border-right:1px solid var(--rule); background:var(--panel);
   position:sticky; top:0; max-height:100vh; overflow-y:auto; padding-bottom:40px;
@@ -342,9 +348,16 @@ body.gaintucked .gainrow{padding:2px 18px}
 .barslide{display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--ink2); white-space:nowrap; flex:none}
 .barslide input[type=range]{width:150px; margin:0}
 .barslide .val{min-width:4.2em; font-family:var(--mono); font-size:12px; color:var(--ink); border-bottom:1px dotted var(--rule); cursor:text}
+/* the selected storey's icons in the site view */
+.stackbtn{cursor:pointer}
+.stackbg{cursor:move}
+/* the window button keeps one width whichever it says, so the bar does not re-wrap under the drawing */
+.minibtn.addWin{min-width:13.2em; text-align:center}
+.stackbtn.off{cursor:default}
+.stackbtn:not(.off):hover rect{stroke-width:1.6}
 /* the picked device's settings, off its gumball on a plan or a section */
 .view{position:relative}
-.devpop{position:fixed; z-index:40; display:grid; gap:3px; padding:5px 7px 6px; background:var(--panel); border:1px solid var(--rule); border-radius:5px; box-shadow:0 3px 10px rgba(0,0,0,.13); font-size:10.5px}
+.devpop{position:fixed; z-index:27; display:grid; gap:3px; padding:5px 7px 6px; background:var(--panel); border:1px solid var(--rule); border-radius:5px; box-shadow:0 3px 10px rgba(0,0,0,.13); font-size:10.5px}
 .devpop .seg.mini button{padding:1px 6px; font-size:10.5px; line-height:1.5}
 .devpop .barchk{font-size:10.5px}
 .devpop[hidden]{display:none}
@@ -355,6 +368,55 @@ body.gaintucked .gainrow{padding:2px 18px}
 .devpop.min>:not(.dvhd){display:none}
 .devpop .dvgrp{display:flex; align-items:center; justify-content:space-between; gap:8px}
 .devpop .dvlab{color:var(--ink3)}
+.devpop .dvname{font:inherit; font-weight:600; color:var(--ink2); background:none; border:1px solid transparent; border-radius:3px; padding:0 3px; margin-left:-4px; min-width:0; width:13em; cursor:text}
+.devpop .dvname:hover{border-color:var(--rule2)}
+.devpop .dvname:focus{border-color:var(--glass); background:var(--panel2, var(--panel)); outline:none}
+.devpop .dvrow{display:flex; flex-wrap:wrap; gap:4px; align-items:center}
+.devpop .dvrow:empty{display:none}
+.devpop .dvnote{color:var(--ink3); max-width:17em; line-height:1.35}
+.devpop .pbtn{font:inherit; font-size:10.5px; padding:1px 7px; line-height:1.5; border:1px solid var(--rule); border-radius:3px; background:var(--panel); color:var(--ink2); cursor:pointer}
+.devpop .pbtn:hover:not(:disabled){border-color:var(--glass); color:var(--ink)}
+.devpop .pbtn:disabled{opacity:.35; cursor:default}
+.devpop .pbtn.quiet{color:var(--ink3)}
+.devpop .pbtn.link{border:0; padding:0; background:none; text-decoration:underline; color:var(--glass)}
+.devpop .pbtn.danger{color:#C0442B; border-color:#e3b3a8}
+.devpop .pmenu{font:inherit; font-size:10.5px; max-width:16em}
+.devpop .stgrid{display:grid; gap:3px}
+.devpop .strow{display:grid; grid-template-columns:18px 22px 22px; align-items:center; gap:3px; color:var(--glass)}
+.devpop .pbtn.arw{padding:0; color:var(--glass); font-size:9px; height:18px}
+.devpop .stico{display:block}
+.devpop .pbtn.more{justify-self:start; border:0; background:none; padding:0; color:var(--glass); font-size:10px}
+.devpop .dvicons{display:inline-flex; gap:1px; margin-left:auto}
+.devpop .icobtn{border:0; background:none; color:var(--ink3); padding:2px 3px; border-radius:3px; cursor:pointer; line-height:0}
+.devpop .icobtn:hover{background:var(--rule2); color:var(--ink)}
+.devpop .icobtn.on{color:var(--glass)}
+.devpop .namerow{flex-wrap:nowrap}
+.devpop .dvname.small{width:11.5em; font-weight:500}
+.devpop select.dvpick{font:inherit; font-weight:600; color:var(--ink2); max-width:13em; border:1px solid transparent; background:none; padding:0 2px; cursor:pointer}
+.devpop select.dvpick:hover{border-color:var(--rule2)}
+.devpop .namerow select.dvpick{font-weight:500; max-width:11.5em}
+.view .v3dbar .livebar{flex:1 0 100%; margin:2px -10px -7px; border-top:1px solid var(--rule2); border-bottom:0}
+.nosol b{color:#C0442B}
+.recsub{font-weight:400; color:var(--ink3); font-size:.9em}
+.devpop .chips{justify-content:flex-start}
+/* live optimization, along the top of every view while it is on */
+.livebar{display:flex; flex-wrap:nowrap; align-items:center; justify-content:space-between; gap:8px; padding:4px 10px; white-space:nowrap; overflow-x:auto; background:color-mix(in srgb, var(--sun) 12%, var(--panel)); border-bottom:1px solid var(--rule2); font-size:11.5px}
+.livebar .liveset{display:flex; flex-wrap:nowrap; align-items:center; gap:8px; min-width:0}
+.livebar .recn{display:inline-flex; align-items:center; gap:6px}
+.livebar .recn input{width:72px; margin:0}
+.livebar .recn output{min-width:1.2em}
+.livebar .liveoff{flex:none; padding:2px 8px}
+.livebar .livekind{font-size:11.5px; width:auto !important; flex:none; max-width:9.5em; margin:0; padding:2px 4px}
+.ctxmenu .livename{font:inherit; font-size:12px; margin:0 4px 4px; padding:3px 5px; min-width:250px}
+.idlive.on{background:var(--sun); color:#fff; border-color:var(--sun)}
+.devpop .dvsec{margin-top:3px; padding-top:4px; border-top:1px solid var(--rule2); color:var(--ink3); font-weight:600}
+.devpop .dvmore{display:grid; gap:3px; border-top:1px solid var(--rule2); padding-top:4px}
+.devpop .chips{gap:3px}
+.devpop .chip{display:inline-flex; border:1px solid var(--rule); border-radius:3px; overflow:hidden}
+.devpop .chip.on{border-color:var(--glass)}
+.devpop .chip .pbtn{border:0; border-radius:0}
+.devpop .chip .chipx{color:var(--ink3); padding:1px 5px}
+.devpop .chip .chipx:hover{color:#C0442B}
 .barchk{display:inline-flex; align-items:center; gap:4px; font-size:12px; color:var(--ink2); white-space:nowrap; cursor:pointer}
 .barchk input{margin:0}
 /* the site view's layers, in groups */
@@ -505,6 +567,7 @@ body.moving, body.moving *{cursor:grabbing !important; user-select:none}
 .view.pinned>.v3dbar{box-shadow:inset 3px 0 0 var(--glass)}
 .libpick select[data-k]{flex:1 1 auto; min-width:0}
 .newsel{flex:none; width:auto !important; max-width:9.5em; font-size:12px; color:var(--glass)}
+.view select.addShd{max-width:none}
 .liblist{list-style:none; margin:0 0 6px; padding:0; display:grid; gap:2px; font-size:12px}
 .liblist li{display:flex; gap:8px; align-items:baseline}
 .liblist .libname{flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink)}

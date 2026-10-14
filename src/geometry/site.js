@@ -23,7 +23,20 @@ export const site0 = () => ({ edit: 'S', N: seg('property', 3, 6, 0), E: seg('pr
   ctx: [], ctxFrame: 'building', ctxSel: null, ctxSeq: 0, draft: CTX_DRAFT0() });
 /** a context building's fields and their ranges: width, depth and height; centre east and north; turn */
 export const CTX_FIELDS = { w: [1, 300], d: [1, 300], h: [1, 300], x: [-1000, 1000], y: [-1000, 1000], a: [-180, 180] };
-export const SITE_FIELDS = { off: [0, 40], width: [3, 60], curb: [0, 15] };
+export const SITE_FIELDS = { off: [0, 40], width: [3, 60], curb: [0, 15], curb2: [0, 15] };
+/** a street's far curb, from the property line across it: its own, or the near curb's distance mirrored */
+export const farCurb = s => s.width - (s.curb2 ?? s.curb);
+/* Sites to start from: each side a street, a lane, an adjoining property or open
+   ground. The context massing is kept; the building is not moved. */
+const st_ = (width, curb, off = 0) => seg('street', off, width, curb), ln_ = (off = 0) => seg('lane', off, 6, 0), pr_ = (off = 3) => seg('property', off, 6, 0), op_ = (off = 3) => seg('open', off, 6, 0);
+export const SITE_PRESETS = {
+  interior: { label: 'Interior lot', about: 'A street in front, neighbours either side, a lane behind', make: () => ({ S: st_(20, 3), E: pr_(), W: pr_(), N: ln_(1.5) }) },
+  corner: { label: 'Corner lot', about: 'Streets on two sides that meet at the corner, neighbours on the other two', make: () => ({ S: st_(20, 3), E: st_(15, 2.5), W: pr_(), N: pr_() }) },
+  cornerLane: { label: 'Corner lot with lane', about: 'Streets on two sides and a lane behind, a neighbour on the fourth', make: () => ({ S: st_(20, 3), E: st_(15, 2.5), W: pr_(), N: ln_(1.5) }) },
+  through: { label: 'Through lot', about: 'Streets front and back, neighbours either side', make: () => ({ S: st_(20, 3), N: st_(15, 2.5), E: pr_(), W: pr_() }) },
+  island: { label: 'Island block', about: 'Streets all round', make: () => ({ S: st_(20, 3), N: st_(15, 2.5), E: st_(15, 2.5), W: st_(15, 2.5) }) },
+  open: { label: 'Open site', about: 'Open ground on every side', make: () => ({ S: op_(), N: op_(), E: op_(), W: op_() }) }
+};
 export const isStreet = s => s && (s.kind === 'street' || s.kind === 'lane');
 
 const turn = (a, x, y) => { const r = a * D2R, c = Math.cos(r), s = Math.sin(r); return [x * c + y * s, -x * s + y * c]; };

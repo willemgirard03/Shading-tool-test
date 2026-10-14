@@ -78,6 +78,7 @@ const SPEC = {
   'site.off': ['Setback from the face', 0, 40, 0.1, 'mm', 1000, 0],
   'site.width': ['Street width', 3, 60, 0.5, 'mm', 1000, 0],
   'site.curb': ['Curb from the property line', 0, 15, 0.1, 'mm', 1000, 0],
+  'site.curb2': ['Far curb from the far property line', 0, 15, 0.1, 'mm', 1000, 0],
   // a context building, or the size the next one is added at
   'site.w': ['Width', 1, 150, 0.5, 'mm', 1000, 0],
   'site.d': ['Depth', 1, 150, 0.5, 'mm', 1000, 0],
@@ -122,16 +123,21 @@ export function buildCalcBar(host) {
   host.innerHTML = `
   <button type="button" class="tuck" id="barTuck" title="Tuck the calculation settings away" aria-expanded="true">▴</button>
   <span class="cbtitle">Calculation settings</span>
-  <label class="barsel"><span class="tipped" title="An hour-by-hour typical year for Vancouver, shifted for warming. It colours the sun chart's dots by temperature and gives the beam for the average and recorded days and every yearly total; a clear day does not depend on it.">Weather file</span> <select data-k="wx" id="c_wx">${Object.entries(WEATHER_FILES).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
+  <label class="barsel"><span class="tipped" title="An hour-by-hour typical year for Vancouver, shifted for warming. It colours the sun chart's dots by temperature and gives the beam for the average and recorded days and every yearly total; a clear day does not depend on it.">Weather file</span> <select data-k="wx" id="c_wx">${Object.entries(WEATHER_FILES).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}<option value="__epw" title="An EnergyPlus weather file of your own - such as a future-shifted file from the Pacific Climate Impacts Consortium. Its hours are read as Pacific Standard Time, the sun as Vancouver's.">Load an .epw file…</option></select><input type="file" id="epwFile" accept=".epw" hidden></label>
   <label class="barsel"><span class="tipped" title="Which windows the plan's floor, the 3D view's light, the sun chart's shading, the solar heat gain and its charts are for.">Results for</span> <select data-k="scope" id="c_scope">${Object.entries(SCOPES).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
   <label class="barsel">Sky ${seg('sky', [['clear', 'Clear day'], ['average', 'Average day'], ['recorded', 'Recorded day']], 'mini')}</label>
   <div class="tset">
     <span class="barslide"><span class="scrub" data-scrub="doy" title="Drag left or right to change the date">Date</span><input type="range" id="c_doy" data-k="doy" min="1" max="365" step="1" aria-label="Date"><span class="val" data-val="doy" tabindex="0" title="Click to type a date, e.g. Jun 21 or 6/21"></span></span>
     <span class="barslide"><span class="scrub" data-scrub="hour" title="Drag left or right to change the time">Time</span><input type="range" id="c_hour" data-k="hour" min="0" max="24" step="${1 / 60}" aria-label="Time of day"><span class="val" data-val="hour" tabindex="0" title="Click to type a time, e.g. 14:30"></span></span>
-    <select data-k="timeMode" id="c_timeMode" class="clocksel" aria-label="Clock" title="Solar time is the sun's own: noon is when it is due south. PST is the standard clock (UTC−8), PDT the summer clock an hour ahead."><option value="sol">Solar time</option><option value="lst">PST</option><option value="pdt">PDT</option></select>
+    <select data-k="timeMode" id="c_timeMode" class="clocksel" aria-label="Clock" title="Solar time is the sun's own: noon is when it is due south. PST is the standard clock (UTC−8), PDT the summer clock an hour ahead."><option value="sol">Solar time</option><option value="lst">UTC−8 (PST)</option><option value="pdt">UTC−7 (PDT)</option></select>
   </div>
   <button type="button" class="playbtn" id="playBtn" title="Run the day from sunrise to sunset: the sun, the shadows and the light inside move with the clock. Click again to stop.">▶ Play day</button>
   <button type="button" class="minibtn" id="layoutReset" title="Put the drawings back in their first arrangement">Reset layout</button>
+  <details class="dd libDD"><summary title="Every window system, glazing unit, shading system and shading device in this design, and the saved windows: what uses each, and those nothing uses can be deleted">Library</summary><div class="ddmenu libmenu"><div id="libHost" class="dyn"></div></div></details>
+  <details class="dd expDD"><summary title="Real Rhino geometry on named layers">Export</summary><div class="ddmenu expmenu">
+    ${row('Scope', `<select data-k="expScope" id="c_expScope">${Object.entries(EXPORT_WORDS).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select>`)}
+    <div class="seg"><button type="button" id="expBtn" title="Real Rhino geometry on named layers, in millimetres and world axes: walls, slab edges and spandrels, the glazing, every shading member as a solid, and the sun ray. The parameters ride along inside the file.">Export .3dm</button></div>
+    <p class="hint" id="expNote"></p></div></details>
   <div class="gainrow" id="gainRow">
     <button type="button" class="tuck" id="gainTuck" title="Tuck the solar heat gain away" aria-expanded="true">▴</button>
     <span class="cbtitle"><span class="tipped" title="Direct solar gain through the glass, for what Results for names, under the sky and weather file set above: the beam, times the cosine of its angle to the glass, times the glass it still reaches, times the SHGC. A reference for the cooling, insulation and interior shading to come - not a daylight or energy model.">Solar heat gain</span></span>
@@ -142,45 +148,10 @@ export function buildCalcBar(host) {
 
 /* ---------- the static shell ---------- */
 export function buildRail(host) {
-  host.innerHTML = `
-  <button type="button" class="tuck railtuck" id="railTuck" title="Tuck the panel away" aria-expanded="true">‹</button>
-  <details class="grp" open><summary>Building Parameters</summary><div class="grpbody">
-    <div class="ctl"><label for="c_typ"><span class="tipped" title="Choosing one replaces the building - floorplate, storeys and every side's glazing - and keeps the date, time and orientation. None comes with shading except the balconies: that is yours to design.">Typology template</span></label>
-      <select id="c_typ" title="${TYPOLOGIES.blank.about}">${Object.entries(TYPOLOGIES).map(([k, t]) => `<option value="${k}"${k === 'blank' ? ' selected' : ''}>${t.label} - ${t.sub}</option>`).join('')}</select></div>
-    <p class="subhd"><span class="tipped" title="Click a storey's wall in the site view to work on it: drag it to move it, pull a face to resize it, turn it by its ring, click a figure to type it. The building turns by the arrow on the ground, or its north offset typed there.">Working storey</span></p>
-    <div id="storeyHost" class="dyn"></div>
-    <label class="chk"><input type="checkbox" data-k="matchPlate" id="c_matchPlate"><span class="tipped" title="The storeys above take this storey's height, slab, floorplate, rotation and offset - at once, and as they are changed. Off, this storey can differ from the ones above and below.">Match floors above</span></label>
-    ${rng('sh')}
-    ${rng('slabT', null, "The slab at the top of this storey, under the floor above. The glass stands between its sill and the slab, so a window is never taller than the storey less its slab and sill; glass set to full height runs up to it.")}
-    <label class="chk"><input type="checkbox" data-k="rotBelow" id="c_rotBelow"><span class="tipped" title="On: this floor's turn is taken from the floor below, so it turns with it. With Match floors above on as well, turning a floor turns each floor above by as much again on the one below it - a twisting tower. Off: the floor's turn is from the building's north offset.">Rotate with floor below</span></label>
-  </div></details>
-
-  <details class="grp" open><summary><span class="tipped" title="The site boundary: a rectangle about the ground floor, each side set back from its wall face and each a street, a lane, an adjoining property line or open ground. Shading devices are read against it, and those that break the by-law turn red in the 3D views.">Site Parameters</span></summary><div class="grpbody">
-    <div id="siteHost" class="dyn"></div>
-  </div></details>
-
-  <details class="grp" open><summary>Window Parameters <span class="sumtag" id="glzTag"></span></summary><div class="grpbody">
-    <div id="condHost" class="dyn"></div>
-    <div id="glzHost" class="dyn"></div>
-  </div></details>
-
-  <details class="grp" open id="shdGrp"><summary>Shading Parameters <span class="sumtag" id="shdTag"></span></summary><div class="grpbody">
-    <div id="shdHost" class="dyn"></div>
-  </div></details>
-
-  <details class="grp"><summary><span class="tipped" title="Copy this condition's storey height, window system or shading to other storeys and sides">Copy</span></summary><div class="grpbody">
-    <div id="copyHost" class="dyn"></div>
-  </div></details>
-
-  <details class="grp"><summary><span class="tipped" title="Every window system, glazing unit, shading system and shading device in this design, and how many sides, systems and windows use each. They are linked: editing one where it is used edits it everywhere. Nothing uses an entry marked unused, and it can be deleted.">Saved types</span></summary><div class="grpbody">
-    <div id="libHost" class="dyn"></div>
-  </div></details>
-
-  <details class="grp"><summary>Export to Rhino</summary><div class="grpbody">
-    ${row('Scope', `<select data-k="expScope" id="c_expScope">${Object.entries(EXPORT_WORDS).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select>`)}
-    <div class="seg"><button type="button" id="expBtn" title="Real Rhino geometry on named layers, in millimetres and world axes: walls, slab edges and spandrels, the glazing, every shading member as a solid, and the sun ray. The parameters ride along inside the file.">Export .3dm</button></div>
-    <p class="hint" id="expNote"></p>
-  </div></details>`;
+  /* Nothing is left in it: the building, the site, the windows and the shading
+     are set on the drawings, from their bars and their small windows; saved
+     types and the Rhino export are in the settings bar. */
+  host.innerHTML = '';
 }
 
 /** the street-encroachment inputs live with the by-law, not in the rail */
@@ -201,11 +172,8 @@ const storeyWords = (s, i) => 'Storey ' + (i + 1) + ' · ' + fmt(s.h * 1000, 0) 
 function storeyPanel(S) {
   const n = S.storeys.length, i = S.sel.st, full = n >= STOREYS_MAX;
   const opts = S.storeys.map((s, k) => k).reverse().map(k => `<option value="${k}"${k === i ? ' selected' : ''}>${storeyWords(S.storeys[k], k)}</option>`).join('');
-  return `<div class="stpick">${btn('selStorey', '▾', i - 1, i <= 0 ? 'off' : '', 'Work on the storey below')}<select id="stSel" aria-label="Working storey">${opts}</select>${btn('selStorey', '▴', i + 1, i >= n - 1 ? 'off' : '', 'Work on the storey above')}</div>
-    <div class="seg wrap stops">
-      ${btn('moveStorey', 'Move up', 1, i >= n - 1 ? 'off' : '', 'Swap this storey with the one above it')}${btn('moveStorey', 'Move down', -1, i <= 0 ? 'off' : '', 'Swap this storey with the one below it')}
-      ${btn('dupStorey', 'Copy above', 'above', full ? 'off' : '', "A copy of this storey, every side's glazing and shading with it, placed above it; the copy becomes the working storey")}${btn('dupStorey', 'Copy below', 'below', full ? 'off' : '', "A copy of this storey, every side's glazing and shading with it, placed below it; the copy becomes the working storey")}
-      ${btn('addStorey', 'New on top', '', full ? 'off' : '', 'A new blank storey on top of the building, as tall and as big as the one below it')}${n > 1 ? btn('delStorey', 'Remove', i, 'quiet', 'Take this storey out of the building') : ''}</div>`;
+  // added, copied, moved and removed by the icons beside the selected storey in the site view
+  return `<div class="stpick">${btn('selStorey', '▾', i - 1, i <= 0 ? 'off' : '', 'Work on the storey below')}<select id="stSel" aria-label="Working storey">${opts}</select>${btn('selStorey', '▴', i + 1, i >= n - 1 ? 'off' : '', 'Work on the storey above')}</div>`;
 }
 const storeySig = S => [S.storeys.length, S.sel.st, S.storeys.map(s => [s.h, s.w, s.d, Object.keys(FACADES).filter(f => s.cells[f]).join('')].join(':')).join(',')].join('|');
 
@@ -216,10 +184,8 @@ function condPanel(S) {
     const n = unitLayout(g, len).n, u = S.sel.unit === null ? Math.floor((n - 1) / 2) : clamp(S.sel.unit, 0, n - 1);
     unit = row('Window', `<div class="seg stepper">${btn('selUnit', '‹', u - 1)}<span class="stepv">${u + 1} of ${n}</span>${btn('selUnit', '›', u + 1)}</div>`);
   }
-  const match = (S.sel.st < S.storeys.length - 1 ? `<label class="chk"><input type="checkbox" data-k="matchGlazing" id="c_matchGlazing"><span class="tipped" title="The storeys above take this side's glazing and shading - at once, and as it is edited.">Match floors above</span></label>` : '')
-    + `<label class="chk"><input type="checkbox" data-k="matchSides" id="c_matchSides"><span class="tipped" title="The storey's other sides take this side's glazing and shading - at once, and as it is edited; with Match floors above on as well, so do every side of the storeys above. Sides with no glazing get it too.">Match all sides</span></label>`;
-  // the side and the window are chosen by clicking them in the site view
-  return match;
+  // the side and the window are chosen by clicking them in the site view; what they are applied to is in the window's own small window
+  return '';
 }
 const condSig = S => { const r = selCell(S), g = r && selUnitType(S) ? layoutGlazing(S, r) : null; return [S.sel.f, S.sel.st, S.storeys.length, S.sel.unit, g ? unitLayout(g, facadeLength(S, S.sel.f)).n : 0].join('|'); };
 /** what the floorplate note says: how this storey's sides stand against the storeys above and below */
@@ -362,14 +328,14 @@ const copySig = S => { const r = selCell(S); return [S.sel.f, S.sel.st, S.storey
 /* the library itself: every saved type, what uses it, and those nothing uses can go */
 const LIB_KINDS = [['systems', 'Window systems'], ['units', 'Glazing units'], ['shading', 'Shading systems'], ['devices', 'Shading devices']];
 function libPanel(S) {
-  const n = usage(S), wins = S.views || [];
-  return `<p class="subhd">Saved windows</p>` + (wins.length ? '<ul class="liblist">' + wins.map(v => `<li><span class="libname" title="${esc(v.f + ' side, storey ' + (v.st + 1) + ', window ' + ((v.unit ?? 0) + 1))}">${esc(v.name)}</span>${btn('delWindow', 'Delete', v.id, 'quiet linkbtn')}</li>`).join('') + '</ul>'
-    : '<p class="hint">None yet: Save view in a plan or section.</p>') + LIB_KINDS.map(([kind, title]) => {
-    const list = libOpts(S, kind);
-    return `<p class="subhd">${title}</p>` + (list.length ? '<ul class="liblist">' + list.map(([id, name]) => `<li><span class="libname">${esc(name)}</span><span class="libuse">${n[id] ? n[id] + ' ×' : 'unused'}</span>${n[id] ? '' : btn('delEntry', 'Delete', kind + ':' + id, 'quiet linkbtn')}</li>`).join('') + '</ul>' : '<p class="hint">None yet.</p>');
-  }).join('');
+  const wins = S.views || [], n = usage(S), lib = kind => Object.values(S.lib[kind]).filter(o => !o.auto);
+  const list = (kind, title, xs) => `<p class="subhd">${title}</p>` + (xs.length ? '<ul class="liblist">' + xs.map(o => `<li><span class="libname">${esc(o.name || defaultName(kind, o))}</span><span class="libuse">${n[o.id] ? n[o.id] + ' ×' : 'unused'}</span>${n[o.id] ? '' : btn('delEntry', 'Delete', kind + ':' + o.id, 'quiet linkbtn')}</li>`).join('') + '</ul>' : '<p class="hint">None yet.</p>');
+  return '<p class="hint">Everything named in the design, linked wherever it is used. A name’s menu in its small window switches it; its copy icon makes one use its own.</p>'
+    + list('systems', 'Window groups', lib('systems')) + list('devices', 'Shading devices', lib('devices')) + list('shading', 'Shading groups', lib('shading'))
+    + `<p class="subhd">Bookmarked views</p>` + (wins.length ? '<ul class="liblist">' + wins.map(v => `<li><span class="libname" title="${esc(v.f + ' side, storey ' + (v.st + 1) + ', window ' + ((v.unit ?? 0) + 1))}">${esc(v.name)}</span>${btn('delWindow', 'Delete', v.id, 'quiet linkbtn')}</li>`).join('') + '</ul>'
+      : '<p class="hint">None yet: Bookmark in a plan or a section.</p>');
 }
-const libPanelSig = S => { const n = usage(S); return libSig(S) + '|' + Object.entries(n).map(([k, v]) => k + v).join(',') + '|' + (S.views || []).map(v => v.id + v.name).join(','); };
+const libPanelSig = S => { const n = usage(S); return JSON.stringify([['systems', 'devices', 'shading'].map(k => Object.values(S.lib[k]).filter(o => !o.auto).map(o => o.id + o.name + (n[o.id] || 0))), (S.views || []).map(v => v.id + v.name)]); };
 
 /* the site, a side at a time */
 function sitePanel(S) {
@@ -397,8 +363,7 @@ function contextBlock(sg) {
 const siteSig = S => { const sg = S.site || {}, f = sg.edit || 'S';
   return [f, sg[f] ? sg[f].kind : '', VIEW.place.on].join('|'); };
 
-const PANELS = [['siteHost', sitePanel, siteSig], ['storeyHost', storeyPanel, storeySig], ['condHost', condPanel, condSig], ['glzHost', glzPanel, glzSig],
-  ['shdHost', shdPanel, shdSig], ['copyHost', copyPanel, copySig], ['libHost', libPanel, libPanelSig]];
+const PANELS = [['libHost', libPanel, libPanelSig]];
 
 /* ---------- values ---------- */
 function readout(k, S) {
@@ -447,7 +412,7 @@ function syncDate(S) {
 export function syncRail(S) {
   for (const [id, render, sig] of PANELS) {
     const host = document.getElementById(id), s = sig(S);
-    if (host.dataset.sig !== s) { host.innerHTML = render(S); host.dataset.sig = s; }
+    if (host && host.dataset.sig !== s) { host.innerHTML = render(S); host.dataset.sig = s; }
   }
   document.querySelectorAll('.ctlzone input[type=range][data-k]').forEach(el => {
     const v = getValue(el.dataset.k, S);
@@ -489,9 +454,10 @@ export function syncRail(S) {
   const ty = document.getElementById('c_typ');
   if (ty) ty.title = TYPOLOGIES[ty.value].about;
   const y = selSystem(S);
-  document.getElementById('glzTag').textContent = S.sel.f + ' · storey ' + (S.sel.st + 1) + (y ? ' · ' + (y.name || defaultName('systems')).toLowerCase() : ' · none') + (isBroken(S) ? ' · broken' : '');
+  const gt = document.getElementById('glzTag'), st2 = document.getElementById('shdTag');
+  if (gt) gt.textContent = S.sel.f + ' · storey ' + (S.sel.st + 1) + (y ? ' · ' + (y.name || defaultName('systems')).toLowerCase() : ' · none') + (isBroken(S) ? ' · broken' : '');
   const sh = g ? selShading(S) : null;
-  document.getElementById('shdTag').textContent = g ? (sh ? (sh.name || 'shading') + ' · ' + sh.devices.length + (sh.devices.length === 1 ? ' device' : ' devices') : 'none') + (isBroken(S, 'shd') ? ' · broken' : '') : '';
+  if (st2) st2.textContent = g ? (sh ? (sh.name || 'shading') + ' · ' + sh.devices.length + (sh.devices.length === 1 ? ' device' : ' devices') : 'none') + (isBroken(S, 'shd') ? ' · broken' : '') : '';
   syncDate(S);
 }
 
@@ -571,6 +537,37 @@ export function openFloatEdit(el, k, S, api) {
     const n = parseFloat(box.value.replace(',', '.').replace(/[^0-9.\-]/g, '')) / mul;
     box.remove();
     if (commit && isFinite(n)) api.set(k, clamp(n, min, max)); else api.refresh();
+  };
+  box.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') close(true); else if (e.key === 'Escape') close(false); });
+  box.addEventListener('blur', () => close(true));
+}
+/* A box for a name at a point on the page, holding the name it has: Enter gives it to `done`, Escape or leaving it lets it go. */
+export function openName(x, y, value, done) {
+  const box = document.createElement('input');
+  box.type = 'text'; box.className = 'floatedit'; box.spellcheck = false; box.value = value; box.placeholder = 'Name';
+  box.title = 'Enter keeps it under this name - replacing one kept there before; Escape leaves it';
+  Object.assign(box.style, { left: Math.round(x + window.scrollX) + 'px', top: Math.round(y + window.scrollY - 12) + 'px', minWidth: '150px', zIndex: 40 });
+  document.body.appendChild(box);
+  box.focus(); box.select();
+  let over = false;
+  const close = ok => { if (over) return; over = true; const v = box.value.trim(); box.remove(); if (ok && v) done(v); };
+  box.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') close(true); else if (e.key === 'Escape') close(false); });
+  box.addEventListener('blur', () => close(false));
+}
+/* A box for a number at a point on the page: Enter gives it to `done`, Escape lets it go. */
+export function openAsk(x, y, placeholder, done) {
+  const box = document.createElement('input');
+  box.type = 'text'; box.className = 'floatedit'; box.spellcheck = false; box.placeholder = placeholder;
+  Object.assign(box.style, { left: Math.round(x + window.scrollX + 10) + 'px', top: Math.round(y + window.scrollY - 12) + 'px', minWidth: '78px' });
+  document.body.appendChild(box);
+  box.focus();
+  let over = false;
+  const close = commit => {
+    if (over) return;
+    over = true;
+    const n = parseFloat(box.value.replace(',', '.').replace(/[^0-9.\-]/g, ''));
+    box.remove();
+    if (commit && isFinite(n) && n !== 0) done(n);
   };
   box.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') close(true); else if (e.key === 'Escape') close(false); });
   box.addEventListener('blur', () => close(true));

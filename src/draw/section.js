@@ -14,7 +14,7 @@ import { sliceBox, projectBox, boxHi, boxLo, aaBox } from '../geometry/boxes.js'
 import { wallPieces, GLASS_T } from '../geometry/cell.js';
 import { scanLine } from '../geometry/analysis.js';
 import { W, H, T, L, POLY, RECT, TB, CIRCLE, PATH, dim, arc, defsCommon, svg, sunKnob, gripMark, mm } from './svg.js';
-import { deviceEdit, depthStrings } from './devedit.js';
+import { deviceEdit, depthStrings, arrayMembers } from './devedit.js';
 import { siteAcross } from '../geometry/site.js';
 const SITE_LOOK = { line: { stroke: '#A23A16', w: 1.1, dash: '9 3 2 3' }, curb: { stroke: 'var(--ink3)', w: .8, dash: '5 3' }, limit: { stroke: '#C0442B', w: 1, dash: '3 2', op: .85 } };
 import { sheetCam } from './sheetcam.js';
@@ -150,6 +150,8 @@ export function drawSection(F, study) {
   // the neighbours' in a lighter hand - and the storey above where it overhangs. They are drawn
   // before the sun ray and the profile angle, so the construction reads on top of them
   const siteBad = V.site && F.checks && F.sel.unit !== null ? F.checks.badOf(F.sel.f, F.sel.st, F.sel.unit) : null;
+  // the blades of each array down the facade, ready to be dragged
+  const mems = arrayMembers(m, 'V', [0, Y(1) - Y(0)], [X(1) - X(0), 0]);
   for (const b of m.own.concat(ctx)) {
     const c = sliceBox(b, 0, cutU), faint = b.ctx;
     if (c) g += PB(c.map(vw), { fill: b.site ? '#D6DBD8' : b.kind === 'h' ? (faint ? 'var(--shade)' : 'var(--poche)') : 'url(#shp)', stroke: faint ? 'var(--ink3)' : 'var(--ink)', w: .7 });
@@ -159,7 +161,7 @@ export function drawSection(F, study) {
     // the window's own devices can be picked; the picked one is drawn in the glass's colour
     if (!faint && b.sys !== undefined) {
       const pts = (c || projectBox(b, 0)).map(vw);
-      sectionDevHits.push({ pts, i: b.sys, cut: !!c });
+      sectionDevHits.push({ pts, i: b.sys, cut: !!c, mem: mems.get(b) });
       if (b.D === F.selD) g += PB(pts, { fill: 'none', stroke: 'var(--glass)', w: 1.5 });
       // past what the site allows, red - while the site's constraints are shown
       if (siteBad && siteBad.has(b.sys)) g += PB(pts, { fill: '#C0442B', op: c ? .55 : .14, stroke: '#C0442B', w: 1.2 });

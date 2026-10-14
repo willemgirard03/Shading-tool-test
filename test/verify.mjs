@@ -16,11 +16,13 @@
    installed) says so and is skipped rather than failing.                    */
 
 import { existsSync } from 'node:fs';
-import { defaultState, applyCase, setValue, CASES, TYPOLOGIES, applyTypology, glazingFromV4, addStorey, duplicateStorey, removeStorey,
+import { defaultState, applyCase, setValue, addWindow, CASES, TYPOLOGIES, applyTypology, glazingFromV4, addStorey, duplicateStorey, removeStorey,
   addGlazing, addDevice, createArray, applyShadingPreset, copyCondition, createHistory, storey0, moveStorey,
   breakUnit, rebindUnit, rebindAll, selGlazing, arrayGlazing, isBroken, selDevice, selCell, duplicateHere, newSystemHere, newUnitHere, useSystem, removeGlazing,
   saveWindow, openWindow, selectionChanged, keepCuts, windowState, shadingFromIdeal, selSystem, addContextAt, removeContext, siteOf, duplicateContext,
-  instanceContext, makeUnique, contextSnaps, pullContext, turnContext, putContext, plateTo } from '../src/state.js';
+  instanceContext, makeUnique, contextSnaps, pullContext, turnContext, putContext, plateTo,
+  addShading, saveEntry, copyEntry, copyName, addSavedWindow, selShading, applySitePreset, rotateSite, liveToggle, liveApply, liveOff } from '../src/state.js';
+import { parseEpw } from '../src/weather.js';
 import { contextPlace, contextBoxes } from '../src/geometry/building.js';
 import { flatGlazing, usage } from '../src/library.js';
 import { siteChecks, siteFrame, insideBy } from '../src/geometry/site.js';
@@ -750,13 +752,68 @@ section('6. The state');
     t.sel.f = 'N'; useSystem(selCellOf(t, 'S').sys, t);                       // the north side on the same system
     setValue('g.winSp', 2.0, t);                                             // edited on the north side ...
     const linked = buildBuilding(t).facades.S.rows[0].cell.pitch === 2.0;   // ... it changes on the south side too
-    t.sel.f = 'S'; t.sel.unit = 4; breakUnit(t); newUnitHere('punched', t);   // one bay of the curtain wall: a punched window
+    t.sel.f = 'S'; t.sel.unit = 4; breakUnit(t); newUnitHere('punched', t);                 // one bay of the curtain wall: a punched window
     const row = buildBuilding(t).facades.S.rows[0], q = row.units[4];
     const walls = wallPieces(q.cell, { u0: q.r0, u1: q.r1, v0: 0, v1: 3.6 }).map(p => p.name);
     const n = usage(t);
     check('the library: a system from scratch waits for a unit; types are linked across sides; a bay of curtain wall broken out takes a punched window in a wall of its own',
       empty && cw.cell.run && cw.cell.sill === 0 && Math.abs(cw.cell.head - 3.3) < 1e-9 && linked && !q.cell.run && walls.includes('pier-left') && row.units[3].cell.run && n[t.storeys[0].cells.S.sys] === 2,
       'curtain wall ' + cw.units.length + ' bays glass to glass, under a 300 mm slab; bay 5 punched: ' + walls.join(', '));
+  }
+  // a weather file read in; sites from a preset and turned a side round; tall typologies carry their windows up
+  {
+    const rows = [];
+    for (let d = 0; d < 366; d++) for (let h = 1; h <= 24; h++) {
+      const date = new Date(Date.UTC(2020, 0, 1 + d)), mo = date.getUTCMonth() + 1, dy = date.getUTCDate();
+      rows.push([2020, mo, dy, h, 60, '?', mo === 7 && dy === 1 && h === 13 ? 25.5 : 10, 5, 70, 101000, 0, 0, 300, 400, mo === 7 && dy === 1 && h === 13 ? 812 : 9999, 100].join(','));
+    }
+    const epw = ['LOCATION,Vancouver Intl,BC,CAN,PCIC,718920,49.18,-123.17,-8.0,2.0', 'DESIGN', 'TYPICAL', 'GROUND', 'HOLIDAYS', 'COMMENTS 1', 'COMMENTS 2', 'DATA PERIODS'].concat(rows).join(String.fromCharCode(10));
+    const w = parseEpw(epw), i = (182 - 1) * 24 + 12;                        // 1 July, the hour ending 13:00
+    const epwOk = w.dni[i] === 812 && w.db[i] === 255 && w.dni[0] === 0 && w.tz === -8;
+    const s = defaultState(); applySitePreset('corner', s);
+    const corner = s.site.S.kind === 'street' && s.site.E.kind === 'street' && s.site.N.kind === 'property';
+    rotateSite(s);
+    const turned = s.site.W.kind === 'street' && s.site.S.kind === 'street' && s.site.E.kind === 'property' && s.site.N.kind === 'property';
+    const tall = defaultState(); applyTypology('resTower', tall); const low = defaultState(); applyTypology('blank', low);
+    check('an .epw read in hour by hour; a corner lot, turned a side round; a tall typology starts with its windows carried up its floors',
+      epwOk && corner && turned && tall.matchAbove.glazing && !low.matchAbove.glazing, [epwOk, corner, turned, tall.matchAbove.glazing, !low.matchAbove.glazing].join(' '));
+  }
+  // live optimization: the ideal written into the window's own members, remade in place as it changes, left behind when turned off
+  {
+    const t = defaultState(); addWindow(t); addShading('pre:canopy', t); liveToggle('h', t);
+    liveApply({ h: { dir: 'h', n: 2, d: 0.5, pitch: 0.9, ext: 0.3 }, v: null }, t);
+    const h0 = selShading(t), id = h0.devices[0], a = h0.devices.length === 1 && t.lib.devices[id].arr && t.lib.devices[id].arr.count === 2;
+    liveApply({ h: { dir: 'h', n: 1, d: 0.8, pitch: 1.8, ext: 0 }, v: null }, t);
+    const b = selShading(t).devices[0] === id && Math.abs(t.lib.devices[id].depth - 0.8) < 1e-9 && !t.lib.devices[id].arr;
+    liveToggle('h', t);
+    const c = !t.live && selShading(t).devices[0] === id && !t.lib.devices[id].auto;
+    // turned on again and off with revert: the canopy it carried before comes back
+    const before = selShading(t).id; liveToggle('c', t); liveApply({ c: { dir: 'h', out: true, n: 3, d: 0.6, pitch: 0.4, Ph: 1.2, ext: 0 } }, t);
+    const up = t.lib.devices[selShading(t).devices[0]], upright = up.angle === -90 && up.arr && up.arr.along === 'out' && up.arr.count === 3;
+    liveOff('revert', t);
+    const back = selShading(t).id === before;
+    // kept under a name: the group and its device take it
+    liveToggle('h', t); liveApply({ h: { dir: 'h', n: 1, d: 0.7, pitch: 1.8, ext: 0 } }, t); liveOff('keep', t, 'Ideal horizontal - Jun 21, 16:00');
+    const named = selShading(t).name === 'Ideal horizontal - Jun 21, 16:00' && t.lib.devices[selShading(t).devices[0]].name === 'Ideal horizontal - Jun 21, 16:00';
+    check('live optimization: turned off, it reverts to what the window carried, or keeps the last of it under a name; upright members step out from the facade', upright && back && named, [upright, back, named].join(' '));
+    check('live optimization: the ideal goes on the window in place of its shading, is remade in place, and stays when turned off', a && b && c, [a, b, c].join(' '));
+  }
+  // the library: saved, a device is offered and added linked; a copy goes its own way, named apart; saved under a name taken, the old one gives way
+  {
+    const t = defaultState(); addWindow(t); addShading('pre:canopy', t); saveEntry('device', t);
+    const D0 = selDevice(t);
+    t.sel.f = 'E'; addWindow(t); addShading('dev:' + D0.id, t);
+    setValue('d.depth', 1.4, t);                                             // edited on the east: the south's is the same device
+    const linked = selDevice(t).id === D0.id && Math.abs(D0.depth - 1.4) < 1e-9 && D0.saved;
+    const nm = copyName('device', t); copyEntry('device', nm, t); setValue('d.depth', 0.6, t);
+    const apart = nm === 'Canopy - Copy 01' && selDevice(t).id !== D0.id && Math.abs(D0.depth - 1.4) < 1e-9 && !selDevice(t).saved;
+    setValue('d.name', 'Canopy', t); saveEntry('device', t);                 // saved as Canopy: the old Canopy gives way, the south takes this one
+    const replaced = !t.lib.devices[D0.id] && flatGlazing(t, selCellOf(t, 'S')).devices[0].id === selDevice(t).id;
+    addShading('new:v', t); saveEntry('group', t); const gid = selShading(t).id;
+    t.sel.f = 'N'; addWindow(t); addShading('grp:' + gid, t); const grp = selShading(t).id === gid;
+    saveEntry('window', t); const wid = selSystem(t).id; t.sel.f = 'W'; addSavedWindow(wid, t); const win = selCellOf(t, 'W').sys === wid;
+    check('the library: a saved device added elsewhere is linked; a copy, named "- Copy 01", goes its own way; saved under a taken name it replaces the old; groups and window groups added linked',
+      linked && apart && replaced && grp && win, [linked, apart, replaced, grp, win].join(' '));
   }
   // match all sides: the storey's other sides take the side's glazing and shading, and with floors above, every side above too
   {
@@ -1012,6 +1069,16 @@ section('6. The state');
     t.sel.f = 'S'; const s = getV('surfAz', t);
     check('a surface azimuth typed for the selected side turns the whole building to give it that bearing', Math.abs(e + 75) < 1e-9 && Math.abs(rot - 15) < 1e-9 && Math.abs(s - 15) < 1e-9,
       'east ' + fmt(e, 1) + '° · rotation ' + fmt(rot, 1) + '° · south ' + fmt(s, 1) + '°');
+  }
+  // a window added is one window; made an array it is set out by spacing, switched to number it keeps its count; taken off, the side is bare
+  {
+    const t = defaultState(), one = addWindow(t) && getV('g.arrN', t) === 1 && !getV('g.arrOn', t);
+    setValue('g.arrOn', true, t); const arr = getV('g.arrOn', t) && getV('g.arrBy', t) === 'spacing' && getV('g.arrN', t) > 1;
+    const n = getV('g.arrN', t); setValue('g.arrBy', 'number', t); const kept = getV('g.arrBy', t) === 'number' && getV('g.arrN', t) === n;
+    setValue('g.arrOn', false, t); const single = getV('g.arrN', t) === 1;
+    removeGlazing(t); const bare = !t.storeys[0].cells.S;
+    check('a window added is one window; made an array it is set out by spacing, by number it keeps its count; off it is one again; removed, the side is bare',
+      one && arr && kept && single && bare, [one, arr, kept, single, bare].join(','));
   }
   // a member's whole length typed keeps it following the window
   {

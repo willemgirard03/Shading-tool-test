@@ -15,7 +15,7 @@ import { scanLine } from '../geometry/analysis.js';
 import { sunPatches, SURFACE_NAMES } from '../geometry/room.js';
 import { storeyParts, plateCorners } from '../geometry/storey.js';
 import { W, H, T, L, POLY, RECT, TB, CIRCLE, dim, arc, tickLine, defsCommon, svg, sunKnob, gripMark, mm } from './svg.js';
-import { deviceEdit, depthStrings } from './devedit.js';
+import { deviceEdit, depthStrings, arrayMembers } from './devedit.js';
 import { siteAcross } from '../geometry/site.js';
 const SITE_LOOK = { line: { stroke: '#A23A16', w: 1.1, dash: '9 3 2 3' }, curb: { stroke: 'var(--ink3)', w: .8, dash: '5 3' }, limit: { stroke: '#C0442B', w: 1, dash: '3 2', op: .85 } };
 import { sheetCam } from './sheetcam.js';
@@ -210,10 +210,12 @@ export function drawPlan(F, study) {
   }
   // the window's own devices can be picked, each by its outline from above; the picked one is drawn in the glass's colour
   const siteBad = V.site && F.checks && F.sel.unit !== null ? F.checks.badOf(F.sel.f, F.sel.st, F.sel.unit) : null;
+  // the fins of each array across the facade, ready to be dragged
+  const mems = arrayMembers(m, 'U', [X(1) - X(0), 0], [0, Y(1) - Y(0)]);
   for (const b of own) {
     if (b.sys === undefined) continue;
     const pts = projectBox(b, 1).map(uw);
-    planDevHits.push({ pts, i: b.sys, cut: !!sliceBox(b, 1, vMid) });
+    planDevHits.push({ pts, i: b.sys, cut: !!sliceBox(b, 1, vMid), mem: mems.get(b) });
     if (b.D === F.selD) body += PB(pts, { fill: 'none', stroke: 'var(--glass)', w: 1.5 });
     // past what the site allows, red - while the site's constraints are shown
     if (siteBad && siteBad.has(b.sys)) body += PB(pts, { fill: '#C0442B', op: .3, stroke: '#C0442B', w: 1.2 });

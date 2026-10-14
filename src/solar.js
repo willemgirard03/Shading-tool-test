@@ -12,7 +12,7 @@ import { D2R, R2D, clamp, wrap360, wrap180 } from './util.js';
 
 /** taken from the weather-file header */
 export const SITE = { lat: 49.19, lon: -123.18, tzMeridian: -120, tz: -8 };
-export const CLOCK_NAME = { lst: 'PST', pdt: 'PDT', sol: 'solar' };
+export const CLOCK_NAME = { lst: 'UTC−8 (PST)', pdt: 'UTC−7 (PDT)', sol: 'solar' };
 
 export function equationOfTime(doy) {               // minutes
   const B = (doy - 81) * 360 / 364 * D2R;

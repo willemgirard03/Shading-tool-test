@@ -7,19 +7,20 @@ export const AXCAM0 = { daz: 220, el: 26, zoom: 1.25, panX: 0, panY: 0, focus: n
 export const DETCAM0 = { az: -32, el: 14, zoom: 1, panX: 0, panY: 0 };
 export const AX_LAYERS = [
   ['dome', 'Altitude rings', 'sky'],
-  ['seasons', 'Seasonal sun paths', 'sky'],
-  ['day', 'The selected day’s path', 'sky'],
+  ['seasons', 'Solstice and equinox paths', 'sky'],
+  ['hours', 'Hour lines (figure eights on a zone’s clock)', 'sky'],
   ['wxdots', 'Weather hours, by temperature', 'sky'],
-  ['ray', 'The sun and its ray', 'sky'],
+  ['ray', 'The sun and its ray', 'sun'],
+  ['day', 'The selected day’s path', 'sun'],
   ['angles', 'Altitude β, solar azimuth and γ', 'angles'],
   ['azimuth', 'Surface azimuth', 'angles'],
   ['triangle', 'Profile angle θ', 'angles'],
   ['compass', 'Compass rose', 'ground'],
   ['grid', 'Grid', 'ground'],
-  ['site', 'Site boundary and streets', 'ground']
+  ['site', 'Site boundary and streets', 'site']
 ];
 /** the layers' groups: a group switched off hides all of its layers; each group's labels switch on their own */
-export const AX_GROUPS = [['sky', 'Sky dome'], ['angles', 'Sun angles'], ['ground', 'Ground']];
+export const AX_GROUPS = [['sky', 'Sky dome'], ['sun', 'Sun'], ['angles', 'Sun angles'], ['ground', 'Compass and grid'], ['site', 'Site']];
 
 export const V = {
   axcam: Object.assign({}, AXCAM0),

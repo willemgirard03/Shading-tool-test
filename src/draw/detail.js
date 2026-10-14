@@ -30,7 +30,7 @@ import { boxFaces } from '../geometry/boxes.js';
 import { storeyParts, plateCorners } from '../geometry/storey.js';
 import { lightUnits, PLAN_LIGHT, PLAN_LIGHT_WORDS } from '../geometry/floorsun.js';
 import { sunLocal } from '../solar.js';
-import { W, H, L, T, TB, CIRCLE, POLY, defsCommon, svg, paintFaces, sunKnob } from './svg.js';
+import { W, H, L, T, TB, CIRCLE, POLY, PATH, defsCommon, svg, paintFaces, sunKnob } from './svg.js';
 
 export const DETAIL_VIEWS = {
   outside: { az: -32, el: 14, zoom: 1, panX: 0, panY: 0 },
@@ -41,6 +41,49 @@ const FLOOR = '#E4DFD4', ROOMWALL = '#F2F0EB';
 
 /** the bay the unit stands in, or a nominal one for a blank storey */
 const bayOf = m => m.opening ? { u0: m.r0, u1: m.r1 } : { u0: -1.6, u1: 1.6 };
+/* The bay, unless the whole floor is shown, cut down to a metre of wall each
+   side of its window - a single window on a long side is otherwise a sliver in
+   a long wall. */
+const WALL_EACH_SIDE = 1.0;
+export function cropBay(m, whole) {
+  if (whole || !m.opening) return m;
+  const o = m.opening, r0 = Math.max(m.r0, o.u0 - WALL_EACH_SIDE), r1 = Math.min(m.r1, o.u1 + WALL_EACH_SIDE);
+  return r0 > m.r0 + 1e-6 || r1 < m.r1 - 1e-6 ? Object.assign({}, m, { r0, r1 }) : m;
+}
+/* The sun's angles at the window, when asked for: from the middle of its sill,
+   the facade's normal and the ray to the sun; the ray's plan, laid flat; the
+   altitude beta up from it; gamma round from the normal to it; and the profile
+   angle theta, in the plane square to the facade, up from the normal. Each
+   figure typed over moves the sun. */
+function detailAngles(F, m, P) {
+  const { cur } = F, o = m.opening;
+  if (!o || !cur.up) return '';
+  const s = cur.sl, Lr = Math.max(1, (o.v1 - o.v0) * 0.9), O = [(o.u0 + o.u1) / 2, o.v0, 0], n = [0, 0, 1];
+  const add = (a, b, k) => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k];
+  const pth = pts => pts.map((p, i) => (i ? 'L' : 'M') + P(p).map(v => fmt(v, 2)).join(',')).join(' ');
+  const arc = (e1, e2, a, r) => Array.from({ length: 25 }, (_, i) => { const t = a * i / 24; return add(O, [e1[0] * Math.cos(t) + e2[0] * Math.sin(t), e1[1] * Math.cos(t) + e2[1] * Math.sin(t), e1[2] * Math.cos(t) + e2[2] * Math.sin(t)], r); });
+  const lab = (p, txt, col, key) => { const q = P(p); return TB(q[0], q[1] + 3, txt, { anchor: 'middle', size: 9.5, fill: col, bg: .92, edit: key }); };
+  let g = PATH(pth([O, add(O, n, Lr * 1.1)]), { stroke: 'var(--ink3)', w: .8, dash: '3 3' });
+  g += PATH(pth([O, add(O, s, Lr * 1.35)]), { stroke: 'var(--sun)', w: 1.1 });
+  const hl = Math.hypot(s[0], s[2]);
+  if (hl > 1e-6) {
+    const h = [s[0] / hl, 0, s[2] / hl], alt = Math.asin(clamp(s[1], -1, 1));
+    g += PATH(pth([O, add(O, h, Lr * 1.1)]), { stroke: 'var(--sun)', w: .9, dash: '6 3', op: .85 });
+    g += PATH(pth(arc(h, [0, 1, 0], alt, Lr * 0.4)), { stroke: 'var(--sun)', w: 1.5 });
+    g += lab(add(O, [h[0] * Math.cos(alt / 2), Math.sin(alt / 2), h[2] * Math.cos(alt / 2)], Lr * 0.5), 'β ' + fmt(cur.alt, 1) + '°', 'var(--sun)', 'sunAlt');
+    if (s[2] > 0) {
+      const gm = Math.atan2(h[0], h[2]);
+      g += PATH(pth(arc(n, [Math.sign(gm) || 1, 0, 0], Math.abs(gm), Lr * 0.3)), { stroke: 'var(--ink)', w: 1.5 });
+      g += lab(add(O, [Math.sin(gm / 2), 0, Math.cos(gm / 2)], Lr * 0.45), 'γ ' + fmt(-cur.gamma, 1) + '°', 'var(--ink)', 'gamma');
+    }
+  }
+  if (s[2] > 1e-3) {
+    const th = Math.atan2(s[1], s[2]);
+    g += PATH(pth(arc(n, [0, 1, 0], th, Lr * 0.95)), { stroke: 'var(--sun)', w: 1, dash: '4 2' });
+    g += lab(add(O, [0, Math.sin(th * 0.7), Math.cos(th * 0.7)], Lr * 1.18), 'θ ' + fmt(cur.vsa, 1) + '°', 'var(--sun)', 'theta');
+  }
+  return g;
+}
 
 /** the interior behind the unit, and the part of it the sun reaches on this date */
 export function interiorOf(m, S) {
@@ -75,7 +118,8 @@ export function clampCuts(S, m) {
   S.cutV = clamp(S.cutV, c.v0, c.v1);
 }
 
-export function detailCamera(m, cam, S) {
+export function detailCamera(m0, cam, S) {
+  const m = cropBay(m0, !!cam.whole);
   const x = extents(m, S, !!cam.whole);
   // the orbit turns about the middle of the window being worked on
   const ctr = m.opening ? [(m.opening.u0 + m.opening.u1) / 2, (m.opening.v0 + m.opening.v1) / 2, 0] : [0, m.storeyH / 2, 0];
@@ -245,10 +289,12 @@ function selectedTree(m, cur, x) {
 }
 /** the sun ray's handle, and the glass of every window drawn, as last drawn */
 export let detailSun = null, detailHits = [], detailEye = [0, 0, 1];
+/** where the picked window's small window hangs: the selected window's middle */
+export let detailWinPop = null;
 
 export function drawDetail(F) {
-  const { S, V, m, cur, sel } = F;
-  detailSun = null; detailHits = [];
+  const { S, V, cur, sel } = F, m = cropBay(F.m, !!V.whole);
+  detailSun = null; detailHits = []; detailWinPop = null;
   const I = interiorOf(m, S), cam = detailCamera(m, V.detcam, S), P = cam.P, x = cam.x, e = cam.e;
   detailEye = e;
   let g = defsCommon;
@@ -381,6 +427,7 @@ export function drawDetail(F) {
   g += tag([S.cutU, x.v1, x.w0], 'var(--glass)', 'section ' + fmt(S.cutU * 1000, 0) + ' mm', 'cutU');
   g += tag([uAway, S.cutV, x.w0], 'var(--sun)', 'plan ' + fmt(S.cutV * 1000, 0) + ' mm', 'cutV');
 
+  { const o = m.opening, q = P([(o.u0 + o.u1) / 2, (o.v0 + o.v1) / 2, 0]); detailWinPop = { x: q[0], y: q[1], kind: 'window' }; }
   // one sun ray, from outside through the glass to where it lands inside
   if (cur.onFacade) {
     const o = m.opening, oc = (o.u0 + o.u1) / 2, hw = m.winW / 2, land = [clamp(S.cutU, oc - hw * 0.8, oc + hw * 0.8), (m.sill + m.head) / 2, 0];
@@ -392,6 +439,7 @@ export function drawDetail(F) {
     detailSun = { knob: a, project: (alt, az) => { const sl = sunLocal(alt, az, gf); return sl[2] > 1e-6 ? P(v3.add(land, v3.mul(sl, Lr))) : null; } };
   }
 
+  if (V.detAng) g += detailAngles(F, m, P);
   g += T(12, 20, where + (!cur.onFacade ? (cur.up ? ' · the sun is behind this facade' : ' · the sun is below the horizon') : ''), { size: 9, fill: 'var(--ink3)' });
   return svg(g, 'Three-dimensional view of one glazing unit in its storey, showing where direct sun lands');
 }

@@ -7,7 +7,7 @@ import { solarPosition, sunVec } from '../solar.js';
 import { sunSamples, pickSunAt } from '../sunpick.js';
 import { FACADES, MULTI, facadeAzimuth, buildBuilding, resolveSel, unitModel, blankCell, faceOffset, plateMax, contextPlace, storeyCentre, storeyRot } from '../geometry/building.js';
 import { AXCAM0, DETCAM0 } from '../view.js';
-import { setValue, contextSnaps } from '../state.js';
+import { setValue, getValue, contextSnaps } from '../state.js';
 import { sunGeom, bearing, dayStrip } from '../draw/sunpath.js';
 import { yearGeom } from '../draw/sunyear.js';
 import { detailCamera, cutLimits, cutPlanes } from '../draw/detail.js';
@@ -19,6 +19,8 @@ import { setSheet } from '../draw/svg.js';
    pressed on - the sun, a handle, a massing; the right button orbits (with
    Shift, pans - for a trackpad); the middle button pans; the wheel zooms. A
    left drag on nothing moves nothing. */
+/** how far a point stands from a segment, on the sheet */
+const segDist = (p, a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy || 1, t = clamp(((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2, 0, 1); return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy); };
 export const camMode = e => e.button === 1 || (e.button === 2 && e.shiftKey) ? 'pan' : e.button === 2 ? 'orbit' : 'click';
 /** the middle button's own scrolling kept off a 3D view, so its drag pans the view instead */
 const noAutoScroll = el => el.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
@@ -257,7 +259,7 @@ export function wireView(inst, app) {
         // the eye keeps its direction in the world as the view moves to the new window's frame
         const eL = hit.eye(inst.h.eye);
         V.detcam.az = Math.atan2(eL[0], eL[2]) * 180 / Math.PI;
-        app.select(hit.f, hit.st, hit.unit);
+        app.selectWindow(hit.f, hit.st, hit.unit);
       }
     }
   };
@@ -272,7 +274,7 @@ export function wireView(inst, app) {
   /* ---- the section and the plan: the wheel zooms about the pointer, a drag pans ---- */
   if (inst.type === 'section' || inst.type === 'plan') {
     const host = inst.host, isSec = inst.type === 'section', key = isSec ? 'seccam' : 'plancam';
-    let pan = null, sunDrag = null, cutDrag = false, gripDrag = null, popDown = false, press = null, travel = 0;
+    let pan = null, sunDrag = null, cutDrag = false, gripDrag = null, popDown = false, press = null, travel = 0, memDrag = null;
     noAutoScroll(host);
     host.addEventListener('contextmenu', e => e.preventDefault());
     /* A grip - the sill, the head, a jamb, the glass's set-back, a device's
@@ -284,11 +286,12 @@ export function wireView(inst, app) {
     const inPoly = (p, q) => { let c = false; for (let i = 0, j = q.length - 1; i < q.length; j = i++) if ((q[i][1] > p[1]) !== (q[j][1] > p[1]) && p[0] < (q[j][0] - q[i][0]) * (p[1] - q[i][1]) / (q[j][1] - q[i][1]) + q[i][0]) c = !c; return c; };
     // what the plane cuts comes before what is seen beyond it, and the smaller outline before the larger
     const area = q => Math.abs(q.reduce((s, p, j) => s + p[0] * q[(j + 1) % q.length][1] - q[(j + 1) % q.length][0] * p[1], 0)) / 2;
-    const devAt = v => {
+    const hitAt = v => {
       const hs = ((v && inst.h.devHits) || []).filter(h => inPoly(v, h.pts) || h.pts.some((q, j) => segD(v, q, h.pts[(j + 1) % h.pts.length]) < 5));
       hs.sort((a, b) => (b.cut - a.cut) || area(a.pts) - area(b.pts));
-      return hs.length ? hs[0].i : null;
+      return hs[0] || null;
     };
+    const devAt = v => { const h = hitAt(v); return h ? h.i : null; };
     // a grip under the pointer; a line that drags whole - the site's - only where no grip is
     const gripAt = v => v && ((inst.h.grips || []).find(g => !g.line && Math.hypot(v[0] - g.p[0], v[1] - g.p[1]) < 8)
       || (inst.h.grips || []).find(g => g.line && segD(v, g.line[0], g.line[1]) < 5));
@@ -340,7 +343,7 @@ export function wireView(inst, app) {
         e.preventDefault(); return;
       }
       // a press on the drawing itself: let go where it was pressed, it picks the device there, or lets the picked one go
-      press = { v };
+      press = { v, hit: hitAt(v) };
     });
     host.addEventListener('pointermove', e => {
       if (gripDrag) {
@@ -383,7 +386,26 @@ export function wireView(inst, app) {
         if (isSec) S.cutV = inst.h.cut.toV(v[1]); else S.cutU = inst.h.cut.toU(v[0]);
         app.scheduleLight(); return;
       }
-      if (press) { const v = viewPoint(host, e); if (v) travel = Math.max(travel, Math.hypot(v[0] - press.v[0], v[1] - press.v[1])); return; }
+      if (memDrag) {
+        // a member dragged along its array: the spacing it implies, from the array's first member - or its last, for the first
+        const v = viewPoint(host, e); if (!v) return;
+        const h = memDrag.mem, s = h.dA, d2 = s[0] * s[0] + s[1] * s[1] || 1, a = h.a0 + ((v[0] - memDrag.v0[0]) * s[0] + (v[1] - memDrag.v0[1]) * s[1]) / d2;
+        const sp = Math.max(0.02, h.idx > 0 ? (a - h.first) * h.sd / h.idx : (h.last - a) * h.sd / (h.n - 1));
+        if (h.mode === 'count') setValue('a.count', clamp(Math.round(h.L / sp) + 1, 2, 200), S);
+        else setValue('a.spacing', Math.min(3, Math.round(sp / 0.005) * 0.005), S);
+        app.scheduleLight(); return;
+      }
+      if (press) {
+        const v = viewPoint(host, e); if (v) travel = Math.max(travel, Math.hypot(v[0] - press.v[0], v[1] - press.v[1]));
+        // a member of an array pressed and moved: it is picked, and drags the array's spacing or number
+        if (travel >= 3 && press.hit && press.hit.mem) {
+          app.pick(press.hit.i, inst); H.mark('grip:member');
+          memDrag = { mem: press.hit.mem, v0: press.v }; press = null; V[key].grab = true;
+          try { host.setPointerCapture(e.pointerId); } catch (_) { }
+          host.classList.add('drag');
+        }
+        return;
+      }
       if (!pan) {
         const v = viewPoint(host, e);
         const gp = gripAt(v);
@@ -397,7 +419,8 @@ export function wireView(inst, app) {
       app.paint(inst);
     });
     const end = e => {
-      const moved = !!(sunDrag || cutDrag || gripDrag), click = travel < 3 && e.type === 'pointerup';
+      const moved = !!(sunDrag || cutDrag || gripDrag || memDrag), click = travel < 3 && e.type === 'pointerup';
+      memDrag = null;
       const g = gripDrag && gripDrag.g, wasPress = !!press, wasPop = popDown;
       pan = null; sunDrag = null; cutDrag = false; gripDrag = null; popDown = false; press = null; host.classList.remove('drag'); H.release && H.release();
       // the gumball's centre opens the device's settings; an arrow clicked asks how far; a click elsewhere picks a device, or lets it go
@@ -441,6 +464,8 @@ export function wireView(inst, app) {
   const onHandle = v => {
     const hd = inst.h.handle;
     if (!v || !hd) return false;
+    // the building drawn over its line is picked first: the line is taken only off the building
+    if ((inst.h.hits || []).some(h => inside(h.pts, v[0], v[1]))) return false;
     const { a, b } = hd, dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy || 1;
     const t = clamp(((v[0] - a[0]) * dx + (v[1] - a[1]) * dy) / L2, 0, 1);
     return Math.hypot(a[0] + dx * t - v[0], a[1] + dy * t - v[1]) < 9 || Math.hypot(b[0] - v[0], b[1] - v[1]) < 11;
@@ -515,21 +540,63 @@ export function wireView(inst, app) {
   };
   /* The selected storey, once its wall has been clicked: dragged anywhere on
      it, it moves; its side handles push or pull a side; its ring turns it.
-     A click on it that does not move goes on to pick what is under it. */
+     A click on it that does not move goes on to pick what is under it. Its
+     arc, at the gumball, turns it; the square on its roof sets its height. */
   const plateAt = v => {
     const pe = inst.h.plateEdit;
     if (!pe || !V.plate.on || pe.st !== S.sel.st) return null;
-    if (nearPt(v, pe.rot.p, 11)) return { kind: 'rot' };
     const f = pe.faces.find(f => nearPt(v, f.p, 9));
     if (f) return { kind: 'face', f };
-    return pe.st > 0 && inside(pe.hull, v[0], v[1]) ? { kind: 'move' } : null;
+    // its arc, at the gumball: turns it
+    const arc = pe.rot.arc;
+    for (let k = 1; k < arc.length; k++) if (segDist(v, arc[k - 1], arc[k]) < 6) return { kind: 'rot' };
+    if (nearPt(v, arc[0], 9) || nearPt(v, arc[arc.length - 1], 9)) return { kind: 'rot' };
+    if (f) return { kind: 'face', f };
+    // its gumball: an arrow moves it along one of its axes, the square between them freely
+    const gm = pe.gum;
+    if (gm) {
+      const a = gm.axes.find(a => Math.hypot(v[0] - a.tip[0], v[1] - a.tip[1]) < 10 || segDist(v, gm.o, a.tip) < 5);
+      if (a) return { kind: 'axis', a };
+      if (inside(gm.plane, v[0], v[1])) return { kind: 'move' };
+    }
+    return null;
   };
-  const plateSnap = () => { const i = S.sel.st, p = S.storeys[i]; return { C: storeyCentre(S, i).slice(), a: storeyRot(S, i), w: p.w, d: p.d }; };
+  // the pointer read on the selected storey's floor, where its gumball stands, rather than on the ground
+  const floorAt = e => {
+    const v = viewPoint(ax, e), pe = inst.h.plateEdit, dz = pe && pe.rot.dz || [0, 0];
+    return v ? axonCamera(S, V.axcam).ground(v[0] - dz[0], v[1] - dz[1]) : null;
+  };
+  /* The site's lines: one pressed and dragged pushes or pulls its figure -
+     a setback, a curb, a street's width - straight out from the building, to
+     the nearest 100 mm; pressed and let go, it opens the boundary's small window
+     on its side. The building drawn over a line is picked first. */
+  const siteLineAt = v => {
+    const ls = inst.h.siteLines;
+    if (!v || !ls || !ls.length || (inst.h.hits || []).some(h => inside(h.pts, v[0], v[1]))) return null;
+    let best = null, bd = 5;
+    for (const l of ls) { const d = Math.min(segDist(v, l.a, l.b), Math.hypot(v[0] - l.grip[0], v[1] - l.grip[1]) - 2); if (d < bd) { bd = d; best = l; } }
+    return best;
+  };
+  const siteDrag = (d, e) => {
+    const v = viewPoint(ax, e), l = d.site, s = l.sv;
+    if (!v || d.still) return;
+    if (!d.moved) { if (Math.hypot(v[0] - d.v0[0], v[1] - d.v0[1]) < 3) return; d.moved = true; app.stopPlay(); H.mark('site:' + l.f); }
+    const t = Math.round(((v[0] - d.v0[0]) * s[0] + (v[1] - d.v0[1]) * s[1]) / (s[0] * s[0] + s[1] * s[1] || 1) * 10) / 10;
+    app.siteSetMany(l.set(t));
+  };
+  const plateSnap = () => { const i = S.sel.st, p = S.storeys[i]; return { C: storeyCentre(S, i).slice(), a: storeyRot(S, i), w: p.w, d: p.d, h: p.h }; };
   const plateDrag = (d, e) => {
     const s = d.s0;
     if (!d.moved) { d.moved = true; app.stopPlay(); H.mark('plate:' + d.plate); }
+    if (d.plate === 'axis') {
+      // along the storey's own axis only: the pointer's run along the arrow, to the nearest 50 mm
+      const v = viewPoint(ax, e); if (!v) return;
+      const s = d.a.s, t = Math.round(((v[0] - d.v0[0]) * s[0] + (v[1] - d.v0[1]) * s[1]) / (s[0] * s[0] + s[1] * s[1] || 1) / 0.05) * 0.05;
+      app.plateTo({ C: [d.s0.C[0] + d.a.w[0] * t, d.s0.C[1] + d.a.w[1] * t] });
+      return;
+    }
     if (d.plate === 'move' || d.plate === 'rot') {
-      const G = groundAt(e);
+      const G = floorAt(e);
       if (!G || !d.G0) return;
       if (d.plate === 'move') { app.plateTo({ C: [s.C[0] + G[0] - d.G0[0], s.C[1] + G[1] - d.G0[1]] }); return; }
       const brg = p => Math.atan2(p[0] - s.C[0], p[1] - s.C[1]) * 180 / Math.PI, step = e.shiftKey ? 15 : 1;
@@ -539,6 +606,8 @@ export function wireView(inst, app) {
     const v = viewPoint(ax, e), f = d.f;
     if (!v) return;
     const t = ((v[0] - d.v0[0]) * f.sv[0] + (v[1] - d.v0[1]) * f.sv[1]) / (f.sv[0] * f.sv[0] + f.sv[1] * f.sv[1] || 1);
+    // its top: the storey's height, to the nearest 50 mm - the floors above ride up or down on it
+    if (f.key === 'top') { app.plateTo({ h: clamp(Math.round((s.h + t) / 0.05) * 0.05, 2.4, 8) }); return; }
     const k = f.key[1] === 'x' ? 'w' : 'd', dim = Math.max(4, Math.round((s[k] + t) * 10) / 10), dt = dim - s[k];
     app.plateTo({ [k]: dim, C: [s.C[0] + f.n[0] * dt / 2, s.C[1] + f.n[1] * dt / 2] });
   };
@@ -548,8 +617,8 @@ export function wireView(inst, app) {
     if (ad) return;
     const v = viewPoint(ax, e), pa = v && plateAt(v), at = !pa && v && ctxAt(v);
     ax.classList.toggle('rot', !at && !pa && onHandle(v));
-    const k = pa ? pa.kind : at ? at.kind : null;
-    ax.style.cursor = !k ? '' : k === 'move' ? (e.altKey && at ? 'copy' : 'move') : k === 'rot' ? 'grab' : 'ns-resize';
+    const k = pa ? pa.kind : at ? at.kind : v && siteLineAt(v) ? 'site' : null;
+    ax.style.cursor = !k ? '' : k === 'move' || k === 'axis' ? (e.altKey && at ? 'copy' : 'move') : k === 'rot' || k === 'site' ? 'grab' : 'ns-resize';
   });
   ax.addEventListener('pointerleave', () => { if (V.place.on && V.place.P) { V.place.P = null; app.paint(inst); } });
   document.addEventListener('click', e => { if (menu.isConnected && menu.open && !menu.contains(e.target)) menu.open = false; });
@@ -562,11 +631,14 @@ export function wireView(inst, app) {
     if (v && e.button === 0 && !e.shiftKey) {
       const pa = plateAt(v);
       if (pa) {
-        ad = { plate: pa.kind, f: pa.f, s0: plateSnap(), v0: v, v, G0: groundAt(e), moved: false, mode: 'click' };
+        ad = { plate: pa.kind, f: pa.f, a: pa.a, s0: plateSnap(), v0: v, v, G0: floorAt(e), moved: false, mode: 'click' };
         try { ax.setPointerCapture(e.pointerId); } catch (_) { } ax.classList.add('drag'); e.preventDefault(); return;
       }
       const d = ctxGrab(v, e);
       if (d) { ad = d; try { ax.setPointerCapture(e.pointerId); } catch (_) { } ax.classList.add('drag'); e.preventDefault(); return; }
+      // a site line: pressed while the site is not selected, it selects it; selected, it is dragged
+      const sl = siteLineAt(v);
+      if (sl) { ad = { site: sl, v0: v, moved: false, still: !V.siteEdit }; try { ax.setPointerCapture(e.pointerId); } catch (_) { } ax.classList.add('drag'); e.preventDefault(); return; }
     }
     const sp = solarPosition(S.doy, S.hour, S.timeMode);
     if (v && !e.shiftKey && e.button === 0 && onHandle(v)) {
@@ -580,11 +652,35 @@ export function wireView(inst, app) {
       }
     }
     ad = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, v, moved: false, mode: camMode(e) };
+    // a window of an array under a left press: moved, it drags the array's spacing; let go where it was, it is a click
+    if (v && ad.mode === 'click') {
+      const glass = (inst.h.hits || []).filter(h => h.unit !== null && inside(h.pts, v[0], v[1]));
+      const front = glass.length ? glass.reduce((a, b) => b.d > a.d ? b : a) : null;
+      if (front && front.win) ad.winHit = front;
+    }
     try { ax.setPointerCapture(e.pointerId); } catch (_) { } ax.classList.add('drag'); e.preventDefault();
   });
   ax.addEventListener('pointermove', e => {
     if (!ad) return;
-    if (ad.plate) { plateDrag(ad, e); return; }
+    if (ad.site) { siteDrag(ad, e); return; }
+    if (ad.plate) {
+      // the storey's arrow clicked rather than dragged asks how far to move it instead
+      if (ad.plate === 'axis' && !ad.moved) { const v = viewPoint(ax, e); if (!v || Math.hypot(v[0] - ad.v0[0], v[1] - ad.v0[1]) < 3) return; }
+      plateDrag(ad, e); return;
+    }
+    if (ad.winHit) {
+      // a window dragged along its side: the pitch it implies, from the side's first window - or its last, for the first
+      const v = viewPoint(ax, e); if (!v) return;
+      if (!ad.winOn) {
+        if (Math.hypot(v[0] - ad.v[0], v[1] - ad.v[1]) < 4) return;
+        const hh = ad.winHit; ad.winOn = true; ad.moved = true; app.stopPlay(); app.select(hh.f, hh.st, hh.unit); H.mark('window:array');
+      }
+      const h = ad.winHit.win, s = h.sU, u = h.cc + ((v[0] - ad.v[0]) * s[0] + (v[1] - ad.v[1]) * s[1]) / (s[0] * s[0] + s[1] * s[1] || 1);
+      const p = Math.max(0.3, h.idx > 0 ? (u - h.first) / h.idx : (h.last - u) / (h.n - 1));
+      if (getValue('g.arrBy', S) === 'number') setValue('g.arrN', clamp(Math.round(h.len / p), 1, 200), S);
+      else setValue('g.arrSp', Math.round(p / 0.05) * 0.05, S);
+      app.scheduleLight(); return;
+    }
     if (ad.ctx) { ctxDrag(ad, e); return; }
     if (ad.sun) { const v = viewPoint(ax, e); if (v) applySun(pickSun(S, v[0], v[1], domeProject())); return; }
     if (ad.rot) { const v = viewPoint(ax, e); if (v) turnTo(v); return; }
@@ -600,8 +696,11 @@ export function wireView(inst, app) {
     if (!ad) return;
     const was = ad; ad = null; ax.classList.remove('drag');
     try { ax.releasePointerCapture(e.pointerId); } catch (_) { }
+    if (was.site) { if (was.moved) app.schedule(); else app.openBoundary(was.site.f, inst); return; }
     // a storey dragged settles; a storey clicked without moving goes on to pick what is under it
     if (was.plate && was.moved) { app.schedule(); return; }
+    if (was.plate === 'axis' && e.type === 'pointerup') { app.askPlateMove(was.a.w, was.s0.C, e.clientX, e.clientY); return; }
+    if (was.winOn) { app.schedule(); return; }
     if (was.ctx) {
       // an Alt-drag let go: a copy, or an instance?
       if (was.dupFrom) app.askInstance(was.dupFrom, was.id, e.clientX, e.clientY);
@@ -619,10 +718,13 @@ export function wireView(inst, app) {
       const glass = under.filter(h => h.unit !== null);
       // a click anywhere but on a massing lets the selected one go
       if (S.site && S.site.ctxSel) app.selectContext(null);
-      // a window selects it; a storey's wall selects that side and storey, and the storey to edit; nothing lets the storey go
-      const hit = glass.length ? glass.reduce((a, b) => b.d > a.d ? b : a) : under[0];
+      /* a window selects it; a storey's wall selects that side and storey, and its exposed roof the storey,
+         each the storey to edit; nothing lets the storey go. What is drawn last under the click is taken:
+         storey by storey upward, and in each its walls, then its glass, then its roof */
+      const rank = h => h.st * 3 + (h.unit !== null ? 1 : h.roof ? 2 : 0);
+      const hit = under.length ? under.reduce((a, b) => rank(b) > rank(a) || (rank(b) === rank(a) && b.unit !== null && b.d > a.d) ? b : a) : null;
       if (hit) app.selectPlate(hit.f, hit.st, hit.unit);
-      else if (V.plate.on) { app.endPlate(); app.schedule(); }
+      else { app.endPlate(); app.schedule(); }
     }
   };
   ax.addEventListener('pointerup', axEnd);

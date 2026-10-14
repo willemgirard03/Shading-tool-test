@@ -22,10 +22,10 @@ import { buildingHeight, unitModel, unitKey, FACADES, plateRadius, plateWorld, s
 import { boxFaces } from '../geometry/boxes.js';
 import { bpoly, paintOrder, bspBuild, bspOrder, BSP_CAP } from '../geometry/bsp.js';
 import { openingFaces, GLASS_GROUP } from './opening.js';
-import { W, H, El, T, L, POLY, PATH, CIRCLE, TB, defsCommon, svg, paintFaces, mm } from './svg.js';
+import { W, H, El, T, L, POLY, PATH, CIRCLE, RECT, TB, defsCommon, svg, paintFaces, mm } from './svg.js';
 import { AX_LAYERS } from '../view.js';
 import { hourly } from '../weather.js';
-import { isStreet } from '../geometry/site.js';
+import { isStreet, farCurb } from '../geometry/site.js';
 import { TEMP_BANDS } from './sunpath.js';
 
 // the solstices and the equinox - March's and September's paths all but lie on each other, so one stands for both
@@ -36,7 +36,7 @@ const ringPts = (r, z, n = 96) => Array.from({ length: n + 1 }, (_, i) => compas
 
 /* the sun path on the dome does not depend on the camera, so it is built once
    per dome radius and reused on every orbit frame */
-let arcs = { R: 0, months: null, days: {} };
+let arcs = { R: 0, mode: null, months: null, days: {} };
 function arcRuns(doy, R) {
   const runs = []; let run = null;
   for (let t = 0; t <= 24.001; t += 0.1) {
@@ -47,8 +47,8 @@ function arcRuns(doy, R) {
   }
   return runs;
 }
-function domeArcs(R) {
-  if (arcs.R === R && arcs.months) return arcs.months;
+function domeArcs(R, mode = 'sol') {
+  if (arcs.R === R && arcs.mode === mode && arcs.months) return arcs.months;
   const months = PATH_DOYS.map(doy => ({ doy, key: NOON_LABELS[doy] !== undefined, label: NOON_LABELS[doy] || '',
     runs: arcRuns(doy, R), noon: null, hours: [] }));
   months.forEach(mo => {
@@ -56,11 +56,29 @@ function domeArcs(R) {
     if (sp.alt > 0) mo.noon = v3.mul(sunVec(sp.alt, sp.az), R);
     if (!mo.key) return;
     for (let h = 4; h <= 20; h++) {
-      const s = solarPosition(mo.doy, h, 'sol');
+      const s = solarPosition(mo.doy, h, mode);
       if (s.alt > 1) mo.hours.push({ h, p: v3.mul(sunVec(s.alt, s.az), R) });
     }
   });
-  arcs = { R, months, days: {} };
+  /* An hour line for every hour of the clock chosen: where the sun stands at
+     that hour through the whole year. On solar time the year's two halves trace
+     the same line, and it is straight; on a zone's clock the equation of time
+     opens it into a figure eight, an analemma. */
+  months.hourLines = [];
+  for (let h = 4; h <= 20; h++) {
+    const runs = []; let run = null;
+    for (let d = 1; d <= 366; d += 3) {
+      const s = solarPosition(Math.min(d, 365), h, mode);
+      if (s.alt < 0.5) { run = null; continue; }
+      if (!run) { run = []; runs.push(run); }
+      run.push(v3.mul(sunVec(s.alt, s.az), R));
+    }
+    // a line that runs over New Year's Day meets itself
+    if (runs.length > 1 && solarPosition(1, h, mode).alt >= 0.5 && solarPosition(365, h, mode).alt >= 0.5) { const last = runs.pop(); runs[0] = last.concat(runs[0]); }
+    const s0 = solarPosition(172, h, mode);
+    months.hourLines.push({ h, runs, tag: s0.alt > 1 ? v3.mul(sunVec(s0.alt, s0.az), R) : null });
+  }
+  arcs = { R, mode, months, days: {} };
   return months;
 }
 /** every daylit hour of a weather file as a point on the unit dome, with its temperature band - built once per file */
@@ -78,7 +96,7 @@ function wxPoints(wx) {
   return pts;
 }
 function dayArcPts(doy, R) {
-  domeArcs(R);
+  if (arcs.R !== R || !arcs.months) domeArcs(R);
   if (!arcs.days[doy]) arcs.days[doy] = arcRuns(doy, R);
   return arcs.days[doy];
 }
@@ -205,27 +223,31 @@ function siteGround(F, P) {
   const SF = F.checks.SF, sg = SF.seg, { x0, x1, y0, y1 } = SF;
   const pt = (x, y) => { const w = SF.toW(x, y); return P([w[0], w[1], 0]); };
   const line = (a, b, o) => L(...pt(a[0], a[1]), ...pt(b[0], b[1]), o);
-  const ext = f => isStreet(sg[f]) ? sg[f].width : 0;
   let g = '', over = '';
-  const bands = {
-    S: s => ({ q: [[x0 - ext('W'), y0], [x1 + ext('E'), y0], [x1 + ext('E'), y0 - s.width], [x0 - ext('W'), y0 - s.width]], at: c => [[x0 - ext('W'), y0 - c], [x1 + ext('E'), y0 - c]], mid: [(x0 + x1) / 2, y0 - s.width / 2] }),
-    N: s => ({ q: [[x0 - ext('W'), y1], [x1 + ext('E'), y1], [x1 + ext('E'), y1 + s.width], [x0 - ext('W'), y1 + s.width]], at: c => [[x0 - ext('W'), y1 + c], [x1 + ext('E'), y1 + c]], mid: [(x0 + x1) / 2, y1 + s.width / 2] }),
-    E: s => ({ q: [[x1, y0 - ext('S')], [x1, y1 + ext('N')], [x1 + s.width, y1 + ext('N')], [x1 + s.width, y0 - ext('S')]], at: c => [[x1 + c, y0 - ext('S')], [x1 + c, y1 + ext('N')]], mid: [x1 + s.width / 2, (y0 + y1) / 2] }),
-    W: s => ({ q: [[x0, y0 - ext('S')], [x0, y1 + ext('N')], [x0 - s.width, y1 + ext('N')], [x0 - s.width, y0 - ext('S')]], at: c => [[x0 - c, y0 - ext('S')], [x0 - c, y1 + ext('N')]], mid: [x0 - s.width / 2, (y0 + y1) / 2] })
-  };
-  for (const f of ['S', 'N', 'E', 'W']) {
-    const s = sg[f];
-    if (!isStreet(s)) continue;
-    const b = bands[f](s);
-    // the walks between the property lines and the curbs, the roadway between the curbs a shade warmer, and its centre line
-    g += POLY(b.q.map(p => pt(p[0], p[1])), { fill: '#EFEBE2' });
-    const [r0, r1] = b.at(s.curb), [r2, r3] = b.at(s.width - s.curb);
-    g += POLY([r0, r1, r3, r2].map(p => pt(p[0], p[1])), { fill: '#E1DACB' });
-    if (s.curb > 0.05) g += line(r0, r1, { stroke: '#9A9384', w: .8 }) + line(r2, r3, { stroke: '#9A9384', w: .8 });
-    const [m0, m1] = b.at(s.width / 2);
-    g += line(m0, m1, { stroke: '#B8AE97', w: .9, dash: '8 6' });
-    const m = pt(b.mid[0], b.mid[1]);
+  /* Each side in its own frame: t along the boundary, from its start corner to
+     its end corner, and d out from the property line across the street. Where
+     the sides at its ends are streets or lanes too, its surfaces run on round
+     the corner across them - the walk to their far property line, the roadway
+     to their far curb - so road meets road and the curbs turn the corner. */
+  const SIDE = { S: { lo: x0, hi: x1, a: 'W', b: 'E', at: (t, d) => [t, y0 - d] }, N: { lo: x0, hi: x1, a: 'W', b: 'E', at: (t, d) => [t, y1 + d] },
+    E: { lo: y0, hi: y1, a: 'S', b: 'N', at: (t, d) => [x1 + d, t] }, W: { lo: y0, hi: y1, a: 'S', b: 'N', at: (t, d) => [x0 - d, t] } };
+  const quad = (f, t0, t1, d0, d1) => { const A = SIDE[f]; return [A.at(t0, d0), A.at(t1, d0), A.at(t1, d1), A.at(t0, d1)].map(p => pt(p[0], p[1])); };
+  const seg2 = (f, t0, t1, d) => [SIDE[f].at(t0, d), SIDE[f].at(t1, d)];
+  const ex = (k, fn) => isStreet(sg[k]) ? fn(sg[k]) : 0, wid = q => q.width, near = q => q.curb, far = q => farCurb(q);
+  const span = (f, fn) => [SIDE[f].lo - ex(SIDE[f].a, fn), SIDE[f].hi + ex(SIDE[f].b, fn)];
+  const streets = ['S', 'N', 'E', 'W'].filter(f => isStreet(sg[f]));
+  // the walks, then the roadways over them, then the curbs and centre lines over both
+  for (const f of streets) { const [t0, t1] = span(f, wid); g += POLY(quad(f, t0, t1, 0, sg[f].width), { fill: '#EFEBE2' }); }
+  for (const f of streets) { const [t0, t1] = span(f, far), s = sg[f]; g += POLY(quad(f, t0, t1, s.curb, farCurb(s)), { fill: '#E1DACB' }); }
+  for (const f of streets) {
+    const s = sg[f], [n0, n1] = span(f, near), [r0, r1] = span(f, far), A = SIDE[f];
+    if (s.curb > 0.05) g += line(...seg2(f, n0, n1, s.curb), { stroke: '#9A9384', w: .8 });
+    if (s.width - farCurb(s) > 0.05) g += line(...seg2(f, r0, r1, farCurb(s)), { stroke: '#9A9384', w: .8 });
+    g += line(...seg2(f, n0, n1, (s.curb + farCurb(s)) / 2), { stroke: '#B8AE97', w: .9, dash: '8 6' });
+    const mid = A.at((A.lo + A.hi) / 2, s.width / 2), m = pt(mid[0], mid[1]);
     over += TB(m[0], m[1], s.kind + ' ' + mm(s.width), { anchor: 'middle', size: 8.5, fill: 'var(--ink2)', bg: .85, edit: 'site.' + f + '.width' });
+    // the curb, from the property line, typed on its line
+    if (s.curb > 0.05) { const c = A.at(A.lo + (A.hi - A.lo) * 0.3, s.curb), q = pt(c[0], c[1]); over += TB(q[0], q[1], 'curb ' + mm(s.curb), { anchor: 'middle', size: 8, fill: 'var(--ink3)', bg: .85, edit: 'site.' + f + '.curb' }); }
   }
   const sides = { S: [[x0, y0], [x1, y0]], E: [[x1, y0], [x1, y1]], N: [[x1, y1], [x0, y1]], W: [[x0, y1], [x0, y0]] };
   const look = { street: { stroke: 'var(--ink)', w: 1.4 }, lane: { stroke: 'var(--ink)', w: 1.1, dash: '6 3' }, property: { stroke: '#A23A16', w: 1.1, dash: '9 3 2 3' }, open: { stroke: 'var(--ink3)', w: .7, dash: '2 3' } };
@@ -237,7 +259,38 @@ function siteGround(F, P) {
     if (sg[f].off > 0.05) g += L(a[0], a[1], b[0], b[1], { stroke: 'var(--ink2)', w: .7 });
     over += TB((a[0] + b[0]) / 2, (a[1] + b[1]) / 2 + 3, mm(sg[f].off), { anchor: 'middle', size: 8, fill: 'var(--ink2)', bg: .85, edit: 'site.' + f + '.off' });
   }
-  return { g, over };
+  /* Every line that moves, for the pointer, each with a grip on it: the
+     property line moves the street with it, its widths kept (the setback); the
+     near curb pushes the roadway out at its width (the walk widens); the far
+     curb widens the roadway; the far property line widens the far walk. Each
+     is pushed or pulled straight out from the building. */
+  const out = { S: [0, -1], N: [0, 1], E: [1, 0], W: [-1, 0] }, lines = [], mids = {};
+  const K = (f, k) => 'site.' + f + '.' + k;
+  for (const f of Object.keys(sides)) {
+    const [A, B] = sides[f], n = out[f], M = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2], q0 = pt(...M), q1 = pt(M[0] + n[0], M[1] + n[1]), sv = [q1[0] - q0[0], q1[1] - q0[1]];
+    mids[f] = q0;
+    // the figures as they stand when a drag begins: each move is worked from them, never from what the last move left
+    const s = sg[f], off = s.off, curb = s.curb, width = s.width, c2 = s.curb2 ?? s.curb;
+    const add = (a, b, set) => lines.push({ f, a: pt(...a), b: pt(...b), sv, set, grip: pt(a[0] + (b[0] - a[0]) * 0.22, a[1] + (b[1] - a[1]) * 0.22) });
+    // the property line: the street goes with it, all its widths kept
+    add(A, B, t => [[K(f, 'off'), Math.max(0, off + t)]]);
+    if (isStreet(s)) {
+      const fr = SIDE[f], seg3 = d => seg2(f, fr.lo + (fr.hi - fr.lo) * 0.05, fr.hi - (fr.hi - fr.lo) * 0.05, d);
+      // the street's inside edge, at the curb: the roadway moves out or in at its width, its outside edge with it
+      if (curb > 0.05) add(...seg3(curb), t => { const d = Math.max(-curb, t); return [[K(f, 'curb2'), c2], [K(f, 'width'), width + d], [K(f, 'curb'), curb + d]]; });
+      // the street's outside edge, alone: the roadway widens or narrows
+      add(...seg3(farCurb(s)), t => [[K(f, 'curb2'), c2], [K(f, 'width'), Math.max(curb + c2 + 1, width + t)]]);
+      // the far property line, alone: the far walk widens or narrows
+      add(...seg3(width), t => { const d = Math.max(-c2, t); return [[K(f, 'width'), width + d], [K(f, 'curb2'), c2 + d]]; });
+    }
+    if (F.V.siteEdit && f === (sg.edit || 'S')) over += line(A, B, { stroke: 'var(--glass)', w: 3, op: .75 });
+  }
+  // the grips, while the site is selected: small, so they cue without crowding; brighter on the side being set
+  if (F.V.siteEdit) for (const l of lines) {
+    const on = F.V.siteEdit && l.f === (sg.edit || 'S'), r = on ? 3.6 : 2.8;
+    over += RECT(l.grip[0] - r, l.grip[1] - r, 2 * r, 2 * r, { fill: 'var(--panel2, var(--panel))', stroke: on ? 'var(--glass)' : 'var(--ink3)', 'stroke-width': on ? 1.3 : .9, opacity: on ? 1 : .85 });
+  }
+  return { g, over, lines, mids };
 }
 /* A selected massing, ready to edit in place: a handle in the middle of each
    face toward the eye, pushed or pulled to move that face alone; a ring on
@@ -296,7 +349,8 @@ function windowBracket(F, cam, P) {
   const n = us.length, pitch = n > 1 ? Math.abs(us[1].cc - us[0].cc) : sel.row.cell.pitch, m = at((us[0].cc + us[n - 1].cc) / 2, vb + 0.7);
   const opt = { size: 9.5, fill: 'var(--glass)', bg: .94 };
   g += TB(m[0] - 4, m[1], n + (n === 1 ? ' window' : ' windows'), Object.assign({ anchor: 'end', edit: 'g.arrN' }, opt));
-  g += TB(m[0] + 4, m[1], '@ ' + mm(pitch), Object.assign({ anchor: 'start', edit: 'g.arrSp' }, opt));
+  // a window alone has no spacing to give
+  if (n > 1) g += TB(m[0] + 4, m[1], '@ ' + mm(pitch), Object.assign({ anchor: 'start', edit: 'g.arrSp' }, opt));
   return g;
 }
 /** each side's SHGC, written over the top of its facade where the facade faces the eye, typed over in place */
@@ -331,28 +385,69 @@ function plateEdit(F, i, zb, cam, P) {
     faces.push({ key, p: q, sv: [q1[0] - q[0], q1[1] - q[1]], n: [n[0], n[1], 0] });
   }
   for (const f of faces) g += POLY([[f.p[0] - 5, f.p[1] - 5], [f.p[0] + 5, f.p[1] - 5], [f.p[0] + 5, f.p[1] + 5], [f.p[0] - 5, f.p[1] + 5]], { fill: 'var(--panel)', stroke: 'var(--glass)', w: 1.6 });
-  // the ring at the floor, its knob out past a corner, off every side's handle
-  const DG = Math.SQRT1_2, pc = P(at(0, 0, 0)), pk = P(at(DG, DG, 0)), perM = Math.max(1e-6, Math.hypot(pk[0] - pc[0], pk[1] - pc[1]));
-  const rr = Math.max(Math.hypot(hw, hd) + Math.max(2, 0.1 * Math.hypot(hw, hd)), 40 / perM), ring = [];
-  for (let k = 0; k <= 64; k++) { const t = k / 64 * 2 * Math.PI; ring.push(P(at(rr * Math.sin(t), rr * Math.cos(t), 0))); }
-  g += PATH(ring.map((q, k) => (k ? 'L' : 'M') + fmt(q[0], 1) + ',' + fmt(q[1], 1)).join(' '), { stroke: 'var(--glass)', w: .8, dash: '2 3', op: .7 });
-  const kx = ex[0] * e[0] + ex[1] * e[1] >= 0 ? 1 : -1, ky = ey[0] * e[0] + ey[1] * e[1] >= 0 ? 1 : -1;
-  const kq = P(at(kx * rr * DG, ky * rr * DG, 0));
-  g += CIRCLE(kq[0], kq[1], 7, { fill: 'var(--panel)', stroke: 'var(--glass)', 'stroke-width': 1.6 }) + T(kq[0], kq[1] + 3.5, '↻', { anchor: 'middle', size: 9.5, fill: 'var(--glass)' });
-  g += lab(kq, (Math.abs(p.rot || 0) < 0.05 ? '0' : fmt(p.rot, 1)) + '°' + ((p.rotRel || 'building') === 'below' && i > 0 ? ' on floor below' : ''), 'plnRot', 0, -13);
+  /* its height: pulled up or down by the square at the middle of its roof, and
+     typed on the dimension up its nearest corner */
+  {
+    const R = P(at(0, 0, h)), R1 = P(at(0, 0, h + 1)), sv = [R1[0] - R[0], R1[1] - R[1]];
+    g += POLY([[R[0] - 5, R[1] - 5], [R[0] + 5, R[1] - 5], [R[0] + 5, R[1] + 5], [R[0] - 5, R[1] + 5]], { fill: 'var(--panel)', stroke: 'var(--glass)', w: 1.6 });
+    faces.push({ key: 'top', p: R, sv, n: [0, 0, 1] });
+    const cx = toward(ex) ? 1 : -1, cy = toward(ey) ? 1 : -1, o = Math.max(1, 0.05 * Math.max(p.w, p.d)) * Math.SQRT1_2;
+    const b0 = P(at(cx * hw, cy * hd, 0)), t0 = P(at(cx * hw, cy * hd, h)), b1 = P(at(cx * (hw + o), cy * (hd + o), 0)), t1 = P(at(cx * (hw + o), cy * (hd + o), h));
+    const dn = [b1[0] - b0[0], b1[1] - b0[1]], dl = Math.hypot(dn[0], dn[1]) || 1, tk = [dn[0] / dl * 4, dn[1] / dl * 4];
+    g += L(b0[0], b0[1], b1[0] + tk[0], b1[1] + tk[1], { stroke: 'var(--glass)', w: .6 }) + L(t0[0], t0[1], t1[0] + tk[0], t1[1] + tk[1], { stroke: 'var(--glass)', w: .6 })
+      + L(b1[0], b1[1], t1[0], t1[1], { stroke: 'var(--glass)', w: .9 })
+      + L(b1[0] - tk[0] - tk[1], b1[1] - tk[1] + tk[0], b1[0] + tk[0] + tk[1], b1[1] + tk[1] - tk[0], { stroke: 'var(--glass)', w: 1.2 })
+      + L(t1[0] - tk[0] - tk[1], t1[1] - tk[1] + tk[0], t1[0] + tk[0] + tk[1], t1[1] + tk[1] - tk[0], { stroke: 'var(--glass)', w: 1.2 });
+    g += lab([(b1[0] + t1[0]) / 2, (b1[1] + t1[1]) / 2], mm(h), 'sh', 0, 3);
+  }
   // width and depth along the floor's edges toward the eye; its offset from the building's axis on the roof
   const sy = toward(ey) ? 1 : -1, sx = toward(ex) ? 1 : -1, off = Math.max(1, 0.05 * Math.max(p.w, p.d));
   g += lab(P(at(0, sy * (hd + off), 0)), mm(p.w), 'plnW', 0, 3);
   g += lab(P(at(sx * (hw + off), 0, 0)), mm(p.d), 'plnD', 0, 3);
   // the ground floor stays centred on the site: only the floors above have an offset to type
-  const top = P(at(0, 0, h));
-  if (i > 0) g += lab(top, 'E ' + mm(p.ox || 0), 'plnOX', -40, 4) + lab(top, 'N ' + mm(p.oy || 0), 'plnOY', 40, 4);
-  // the hull of the storey on the drawing: dragged anywhere in it, it moves
-  const pts = foot.concat(roof).map(P).sort((u, v) => u[0] - v[0] || u[1] - v[1]), crs = (k, u, v) => (u[0] - k[0]) * (v[1] - k[1]) - (u[1] - k[1]) * (v[0] - k[0]);
-  const lo = [], hi = [];
-  for (const q of pts) { while (lo.length >= 2 && crs(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
-  for (let k = pts.length - 1; k >= 0; k--) { const q = pts[k]; while (hi.length >= 2 && crs(hi[hi.length - 2], hi[hi.length - 1], q) <= 0) hi.pop(); hi.push(q); }
-  return { g, edit: { st: i, faces, rot: { p: kq, C: C.slice() }, hull: lo.slice(0, -1).concat(hi.slice(0, -1)) } };
+  /* the storey's gumball, at the middle of its floor: an arrow along each of its own axes moves it along
+     that axis alone - dragged, or clicked to type how far - and the square between them moves it freely;
+     the ground floor stays centred on the site, so has neither. The double-headed arc turns it, about its
+     middle, on every floor. All of it a length on the floor itself, so it foreshortens as the view turns. */
+  let gum = null;
+  const GL = Math.max(2, Math.min(10, 0.25 * Math.min(p.w, p.d))), o = P(at(0, 0, 0));
+  let arc;
+  {
+    // between the two arrows, round the square, from near the one's tip to near the other's - on the
+    // storey's own axes, so it turns with the storey and stays put as the view does
+    arc = [];
+    for (let k = 0; k <= 16; k++) { const t = (18 + k / 16 * 54) * D2R; arc.push(P(at(GL * Math.cos(t), GL * Math.sin(t), 0))); }
+    g += PATH(arc.map((q, k) => (k ? 'L' : 'M') + fmt(q[0], 1) + ',' + fmt(q[1], 1)).join(' '), { stroke: 'var(--glass)', w: 1.8 });
+    for (const [a, b] of [[arc[0], arc[2]], [arc[16], arc[14]]]) {
+      const d = [a[0] - b[0], a[1] - b[1]], l = Math.hypot(d[0], d[1]) || 1, ux = d[0] / l, uy = d[1] / l, tx = a[0] + ux * 3, ty = a[1] + uy * 3;
+      g += POLY([[tx, ty], [tx - 9 * ux - 4.5 * uy, ty - 9 * uy + 4.5 * ux], [tx - 9 * ux + 4.5 * uy, ty - 9 * uy - 4.5 * ux]], { fill: 'var(--glass)', stroke: 'var(--glass)', w: .8 });
+    }
+    const mid = arc[8], out = [mid[0] - o[0], mid[1] - o[1]], ol = Math.hypot(out[0], out[1]) || 1;
+    g += lab([mid[0] + out[0] / ol * 16, mid[1] + out[1] / ol * 16], (Math.abs(p.rot || 0) < 0.05 ? '0' : fmt(p.rot, 1)) + '°' + ((p.rotRel || 'building') === 'below' && i > 0 ? ' on floor below' : ''), 'plnRot', 0, 3);
+  }
+  if (i > 0) {
+    const axes = [[ex, '#c2412d'], [ey, '#2f8a4e']].map(([w, col]) => {
+      const q = P(at(w === ex ? 1 : 0, w === ey ? 1 : 0, 0)), s = [q[0] - o[0], q[1] - o[1]], l = Math.hypot(s[0], s[1]) || 1, u = [s[0] / l, s[1] / l];
+      return { w, s, col, u, tip: [o[0] + s[0] * GL, o[1] + s[1] * GL] };
+    });
+    for (const a of axes) {
+      const [ux, uy] = a.u, [tx, ty] = a.tip;
+      g += L(o[0], o[1], tx - ux * 7, ty - uy * 7, { stroke: a.col, w: 1.8 });
+      g += POLY([[tx, ty], [tx - 10 * ux - 5 * uy, ty - 10 * uy + 5 * ux], [tx - 10 * ux + 5 * uy, ty - 10 * uy - 5 * ux]], { fill: a.col, stroke: a.col, w: .8 });
+    }
+    const sq = [[.32, .32], [.62, .32], [.62, .62], [.32, .62]].map(([a, b]) => P(at(GL * a, GL * b, 0)));
+    g += POLY(sq, { fill: 'var(--glass)', op: .35, stroke: 'var(--glass)', w: 1.2 });
+    // its offset east and north, each typed beside the arrow nearest its way
+    const eastish = Math.abs(ex[0]) >= Math.abs(ey[0]) ? 0 : 1, at2 = k => [axes[k].tip[0] + axes[k].u[0] * 22, axes[k].tip[1] + axes[k].u[1] * 22];
+    g += lab(at2(eastish), 'E ' + mm(p.ox || 0), 'plnOX', 0, 4) + lab(at2(1 - eastish), 'N ' + mm(p.oy || 0), 'plnOY', 0, 4);
+    gum = { o, axes, plane: sq };
+  }
+  g += CIRCLE(o[0], o[1], 3, { fill: 'var(--ink2)' });
+  // where the storey's own small window opens: beside it, at its middle
+  const pts = foot.concat(roof).map(P), anchor = [Math.max(...pts.map(q => q[0])) + 6, (P(at(0, 0, 0))[1] + P(at(0, 0, h))[1]) / 2];
+  // where the floor's plane sits on the sheet against the ground's, for a pointer read on the floor
+  const g0 = P([C[0], C[1], 0]);
+  return { g, edit: { st: i, faces, rot: { arc, C: C.slice(), dz: [o[0] - g0[0], o[1] - g0[1]] }, gum, anchor } };
 }
 /** a context building drawn: its faces toward the eye, side by side then its top, and the outline of them all */
 function contextArt(b, cam, P, o = {}) {
@@ -395,12 +490,17 @@ export let axonCtxEdit = null;
 export let axonPlateEdit = null;
 /** the middle of the selected window's glass, in the world, for zooming to it */
 export let axonFocus = null;
+/** where the picked window's small window hangs: the selected window's middle */
+export let axonWinPop = null;
+/** the site's lines that set its figures, as last drawn, and the middle of each side's property line */
+export let axonSiteLines = [], axonSiteMids = null;
 
 /* A group's labels hidden: its figures and names - the text, and the boxes behind it - taken out of what it drew. */
 const unlabelled = s => s.replace(/<text\b[^>]*>[\s\S]*?<\/text>/g, '').replace(/<rect\b[^>]*fill="var\(--panel\)"[^>]*\/>/g, '');
 const GROUP_OF = Object.fromEntries(AX_LAYERS.map(([k, , gk]) => [k, gk]));
 export function drawAxon(F) {
   const { S, V, m, cur, sel } = F, AX = V.axcam;
+  axonWinPop = null; axonSiteLines = []; axonSiteMids = null;
   // a layer shows when it is on and its group is on
   const Ly = Object.fromEntries(Object.entries(V.layers).map(([k, on]) => [k, on && (V.groups || {})[GROUP_OF[k]] !== false]));
   const Lb = V.labels || {};
@@ -454,7 +554,17 @@ export function drawAxon(F) {
     });
   }
 
-  if (Ly.seasons) domeArcs(Rdome).forEach(mo => {
+  // the hours, a faint line each across the year's paths, named at the June end
+  if (Ly.hours) for (const hl of domeArcs(Rdome, S.timeMode).hourLines) {
+    for (const run of hl.runs) {
+      if (run.length < 2) continue;
+      const [b, f] = depthSplit(run, cam);
+      if (b) g += PATH(b, { stroke: 'var(--ink3)', w: .55, op: .35 });
+      if (f) over += PATH(f, { stroke: 'var(--ink3)', w: .7, op: .7 });
+    }
+    if (hl.tag && hl.h % 2 === 0) { const q = P(hl.tag); over += TB(q[0], q[1] - 6, hl.h + 'h', { anchor: 'middle', size: 7.5, fill: 'var(--ink3)', bg: .75 }); }
+  }
+  if (Ly.seasons) domeArcs(Rdome, S.timeMode).forEach(mo => {
     if (Ly.day && mo.doy === cur.doy) return;                // the day layer draws this one
     const o = mo.key ? { stroke: 'var(--poche)', w: 1.2 } : { stroke: 'var(--ink3)', w: .6, op: .55 };
     mo.runs.forEach(run => {
@@ -465,11 +575,12 @@ export function drawAxon(F) {
     mo.hours.forEach(({ h, p }) => {
       const q = P(p);
       over += CIRCLE(q[0], q[1], 1.5, { fill: 'var(--poche)', opacity: .8 });
-      if (mo.doy === 172 && h % 4 === 0 && h !== 12) over += TB(q[0], q[1] - 5, h + 'h', { anchor: 'middle', size: 7.5, fill: 'var(--ink3)', bg: .75 });
     });
     if (mo.label && mo.noon) { const q = P(mo.noon); over += TB(q[0], q[1] - 6, mo.label, { anchor: 'middle', size: 8.5, fill: 'var(--ink2)', bg: .88 }); }
   });
 
+  labels(mSky, 'sky');
+  const mDay = mark();
   // the selected day's own path, picked out on the dome
   if (Ly.day) {
     const runs = dayArcPts(cur.doy, Rdome);
@@ -485,9 +596,11 @@ export function drawAxon(F) {
     }
   }
 
-  labels(mSky, 'sky');
+  labels(mDay, 'sun');
+  const mSite = mark();
+  if (Ly.site && F.checks) { const sx = siteGround(F, P); g += sx.g; over += sx.over; axonSiteLines = sx.lines; axonSiteMids = sx.mids; }
+  labels(mSite, 'site');
   const mGround = mark();
-  if (Ly.site && F.checks) { const sx = siteGround(F, P); g += sx.g; over += sx.over; }
 
   if (Ly.grid) {
     const e = span * 0.9;
@@ -625,15 +738,25 @@ export function drawAxon(F) {
     // the glass of every unit drawn can be clicked, and the selected one is outlined
     for (const u of drawn) {
       const o = u.cell.opening, pr = proj(u), pts = [[o.u0, o.v0, 0], [o.u1, o.v0, 0], [o.u1, o.v1, 0], [o.u0, o.v1, 0]].map(pr);
-      hits.push({ f: u.f, st: u.st, unit: u.i, d: depth(u), pts });
-      if (u.f === sel.f && u.st === sel.st && u.i === sel.unit) g += POLY(pts, { fill: 'var(--glass)', op: .42, stroke: 'var(--glass)', w: 3 }) + POLY(pts, { fill: 'none', stroke: 'var(--panel)', w: 1.2, dash: '3 2.5' });
+      // dragged along its side, a window sets its array's spacing - or its number - over the side's length
+      const row = F.B.facades[u.f].rows[u.st], us = row.units, s0 = pr([0, 0, 0]), s1 = pr([1, 0, 0]);
+      const win = us.length > 1 ? { idx: us.findIndex(q => q.i === u.i), cc: u.cc, first: us[0].cc, last: us[us.length - 1].cc, n: us.length, len: row.len, sU: [s1[0] - s0[0], s1[1] - s0[1]] } : null;
+      hits.push({ f: u.f, st: u.st, unit: u.i, d: depth(u), pts, win });
+      if (u.f === sel.f && u.st === sel.st && u.i === sel.unit) {
+        g += POLY(pts, { fill: 'var(--glass)', op: .42, stroke: 'var(--glass)', w: 3 }) + POLY(pts, { fill: 'none', stroke: 'var(--panel)', w: 1.2, dash: '3 2.5' });
+        // its small window opens off the glass's left edge, clear of the glass itself
+        axonWinPop = { x: Math.min(...pts.map(p => p[0])), y: pts.reduce((s, p) => s + p[1], 0) / 4, kind: 'window' };
+      }
       else if (u.broken) g += POLY(pts, { fill: 'none', stroke: 'var(--sun)', w: 1.2, dash: '3 2' });
     }
-    // the roof of this storey: what the next one does not cover shows
-    g += POLY(fo.pts.map(p => P([p[0], p[1], fo.z1])), { fill: '#F6F8F7', stroke: 'var(--ink)', w: st === S.storeys.length - 1 ? 1 : .7 });
+    // the roof of this storey: what the next one does not cover shows, and a click on it selects the storey
+    const top = fo.pts.map(p => P([p[0], p[1], fo.z1]));
+    g += POLY(top, { fill: '#F6F8F7', stroke: 'var(--ink)', w: st === S.storeys.length - 1 ? 1 : .7 });
+    hits.push({ f: S.sel.f, st, unit: null, roof: true, d: -1e9 + st + 0.5, pts: top });
   }
   if (seenSel) {
     const fr = sel.row.frame, r = sel.row;
+    if (!axonWinPop) { const c = P([(fr.A[0] + fr.B[0]) / 2, (fr.A[1] + fr.B[1]) / 2, r.zb + r.h / 2]); axonWinPop = { x: c[0], y: c[1], kind: 'wall' }; }
     g += POLY([P([fr.A[0], fr.A[1], r.zb]), P([fr.B[0], fr.B[1], r.zb]), P([fr.B[0], fr.B[1], r.zb + r.h]), P([fr.A[0], fr.A[1], r.zb + r.h])],
       { fill: 'none', stroke: 'var(--glass)', w: 1.4, dash: '5 3' });
   }
@@ -708,7 +831,7 @@ export function drawAxon(F) {
       { anchor: 'middle', size: 9, fill: 'var(--sun)', bg: .9 });
   }
 
-  labels(mRay, 'sky');
+  labels(mRay, 'sun');
   const mAng = mark();
   /* the composition of angles, at the foot of the selected facade
      where the profile angle is drawn too: the sun ray's horizontal projection,
@@ -771,11 +894,11 @@ export function drawAxon(F) {
   if (V.plate && V.plate.on) {
     const pe = plateEdit(F, sel.st, zbs[sel.st], cam, P);
     g += pe.g; axonPlateEdit = pe.edit;
-    g += T(12, 56, sel.st === 0 ? 'ground floor selected: it stays centred on the site · pull a face · turn it by its ring · click a figure to type it'
-      : 'storey ' + (sel.st + 1) + ' selected: drag it to move · pull a face · turn it by its ring · click a figure to type it' + (S.matchAbove.plate ? ' · the floors above follow' : ''), { size: 8.5, fill: 'var(--glass)' });
+    g += T(12, 56, sel.st === 0 ? 'ground floor selected: it stays centred on the site · pull a face · pull its top for its height · turn it by its arc · click a figure to type it'
+      : 'storey ' + (sel.st + 1) + ' selected: move it by its arrows, or freely by the square between them · pull a face · pull its top for its height · turn it by its arc · drag a window to space them · click a figure to type it' + (S.matchAbove.plate ? ' · the floors above follow' : ''), { size: 8.5, fill: 'var(--glass)' });
   }
   // the selected side's window array, bracketed as a drawing program brackets an array: its number and its spacing typed over
-  if (V.plate && V.plate.on && sel.row.cell && sel.row.units.length) g += windowBracket(F, cam, P);
+  if ((V.plate && V.plate.on || F.pick === 'window') && sel.row.cell && sel.row.units.length) g += windowBracket(F, cam, P);
   // the selected side's SHGC, above its facade, typed over - while a window or a wall of that side is selected
   if (V.plate && V.plate.on) g += shgcLabels(F, cam, P, sel.f);
   // the selected massing, ready to edit in place, over everything
